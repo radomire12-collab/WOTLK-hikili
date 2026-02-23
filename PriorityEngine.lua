@@ -6,6 +6,9 @@ end
 _G[addonName] = addon
 
 addon.Priorities = addon.Priorities or {}
+addon.AoePriorities = addon.AoePriorities or {}
+
+local OPT_REQUIRE_TARGET = { requireTarget = true }
 
 local function hasTarget(state)
     return state.targetExists and state.targetAttackable and not state.targetDead
@@ -23,7 +26,7 @@ local function canCast(state, spell, opts)
     if opts.requireTarget and not hasTarget(state) then
         return false
     end
-    if not opts.skipUsable and not addon:IsSpellUsable(spell) then
+    if not opts.skipUsable and not addon:IsSpellUsable(spell, true) then
         return false
     end
     if opts.requireTarget and not opts.skipRange and not addon:IsSpellInRange(spell, "target") then
@@ -38,11 +41,11 @@ local function canCast(state, spell, opts)
     return true
 end
 
-local function push(queue, used, spell)
+local function push(queue, used, spell, skipKnownCheck)
     if not spell or used[spell] then
         return
     end
-    if addon.IsSpellKnownLocal and not addon:IsSpellKnownLocal(spell) then
+    if not skipKnownCheck and addon.IsSpellKnownLocal and not addon:IsSpellKnownLocal(spell) then
         return
     end
     used[spell] = true
@@ -51,7 +54,7 @@ end
 
 local function pushIf(queue, used, state, spell, opts)
     if canCast(state, spell, opts) then
-        push(queue, used, spell)
+        push(queue, used, spell, true)
     end
 end
 
@@ -167,6 +170,80 @@ end
 local function ensureHunterAspect(state, queue, used)
     if buff("Aspect of the Dragonhawk") < 60 then
         pushIf(queue, used, state, "Aspect of the Dragonhawk")
+    end
+end
+
+local function aoePush(queue, used, state, entry)
+    if type(entry) == "string" then
+        pushIf(queue, used, state, entry, OPT_REQUIRE_TARGET)
+        return
+    end
+
+    if type(entry) ~= "table" or not entry.spell then
+        return
+    end
+    if entry.when and not entry.when(state) then
+        return
+    end
+
+    local opts = entry.opts
+    if not opts then
+        opts = OPT_REQUIRE_TARGET
+    elseif opts.requireTarget == nil then
+        local copy = entry._optsWithTarget
+        if not copy then
+            copy = {}
+            for k, v in pairs(opts) do
+                copy[k] = v
+            end
+            copy.requireTarget = true
+            entry._optsWithTarget = copy
+        end
+        opts = copy
+    end
+
+    pushIf(queue, used, state, entry.spell, opts)
+end
+
+local function makeAoeHandler(entries, pre)
+    return function(state, queueLength)
+        local queue, used = makeQueue()
+
+        if pre then
+            pre(state, queue, used)
+        end
+        if not hasTarget(state) then
+            return queue, queueLength
+        end
+
+        for _, entry in ipairs(entries) do
+            aoePush(queue, used, state, entry)
+        end
+
+        return queue, queueLength
+    end
+end
+
+local function preDeathKnightAoe(state, queue, used)
+    if buff("Horn of Winter") < 6 then
+        pushIf(queue, used, state, "Horn of Winter")
+    end
+end
+
+local function preHunterAoe(state, queue, used)
+    ensureHunterAspect(state, queue, used)
+end
+
+local function preWarlockAoe(state, queue, used)
+    pushWarlockLifeTap(queue, used, state)
+
+    if buff("Fel Armor") < 60 then
+        pushIf(queue, used, state, "Fel Armor")
+    end
+
+    local curse = chooseWarlockCurse(state)
+    if curse then
+        push(queue, used, curse)
     end
 end
 
@@ -951,6 +1028,345 @@ addon.Priorities["WARRIOR:3"] = function(state, queueLength)
     return queue, queueLength
 end
 
+addon.AoePriorities["DEATHKNIGHT:1"] = makeAoeHandler({
+    "Death and Decay",
+    { spell = "Icy Touch", when = function(state) return debuff(state, "Frost Fever") < 3 end },
+    { spell = "Plague Strike", when = function(state) return debuff(state, "Blood Plague") < 3 end },
+    "Pestilence",
+    "Blood Boil",
+    "Heart Strike",
+    { spell = "Death Coil", when = function(state) return state.runicPower >= 40 end },
+}, preDeathKnightAoe)
+
+addon.AoePriorities["DEATHKNIGHT:2"] = makeAoeHandler({
+    "Howling Blast",
+    "Death and Decay",
+    { spell = "Icy Touch", when = function(state) return debuff(state, "Frost Fever") < 3 end },
+    { spell = "Plague Strike", when = function(state) return debuff(state, "Blood Plague") < 3 end },
+    "Pestilence",
+    "Blood Boil",
+    "Obliterate",
+    { spell = "Frost Strike", when = function(state) return state.runicPower >= 40 end },
+}, preDeathKnightAoe)
+
+addon.AoePriorities["DEATHKNIGHT:3"] = makeAoeHandler({
+    "Death and Decay",
+    { spell = "Icy Touch", when = function(state) return debuff(state, "Frost Fever") < 3 end },
+    { spell = "Plague Strike", when = function(state) return debuff(state, "Blood Plague") < 3 end },
+    "Pestilence",
+    "Blood Boil",
+    "Scourge Strike",
+    { spell = "Death Coil", when = function(state) return state.runicPower >= 60 end },
+}, preDeathKnightAoe)
+
+addon.AoePriorities["DRUID:1"] = makeAoeHandler({
+    "Starfall",
+    "Hurricane",
+    "Typhoon",
+    { spell = "Moonfire", when = function(state) return debuff(state, "Moonfire") < 2 end },
+    { spell = "Insect Swarm", when = function(state) return debuff(state, "Insect Swarm") < 2 end },
+    "Wrath",
+    "Starfire",
+})
+
+addon.AoePriorities["DRUID:2"] = makeAoeHandler({
+    { spell = "Tiger's Fury", opts = { requireTarget = false }, when = function(state) return state.energy <= 35 end },
+    "Swipe (Cat)",
+    "Mangle (Cat)",
+    { spell = "Rake", when = function(state) return debuff(state, "Rake") < 2 end },
+    { spell = "Ferocious Bite", when = function(state) return (state.comboPoints or 0) >= 5 end },
+    "Shred",
+})
+
+addon.AoePriorities["DRUID:3"] = makeAoeHandler({
+    { spell = "Rejuvenation", opts = { requireTarget = false }, when = function(state) return state.playerHealthPct < 70 end },
+    { spell = "Healing Touch", opts = { requireTarget = false }, when = function(state) return state.playerHealthPct < 45 end },
+    "Hurricane",
+    { spell = "Moonfire", when = function(state) return debuff(state, "Moonfire") < 2 end },
+    { spell = "Insect Swarm", when = function(state) return debuff(state, "Insect Swarm") < 2 end },
+    "Wrath",
+})
+
+addon.AoePriorities["HUNTER:1"] = makeAoeHandler({
+    "Explosive Trap",
+    "Multi-Shot",
+    "Volley",
+    "Kill Command",
+    "Arcane Shot",
+    "Steady Shot",
+}, preHunterAoe)
+
+addon.AoePriorities["HUNTER:2"] = makeAoeHandler({
+    "Volley",
+    "Multi-Shot",
+    "Chimera Shot",
+    "Aimed Shot",
+    "Steady Shot",
+}, preHunterAoe)
+
+addon.AoePriorities["HUNTER:3"] = makeAoeHandler({
+    "Explosive Trap",
+    "Multi-Shot",
+    "Volley",
+    "Explosive Shot",
+    "Black Arrow",
+    "Steady Shot",
+}, preHunterAoe)
+
+addon.AoePriorities["MAGE:1"] = makeAoeHandler({
+    { spell = "Evocation", opts = { requireTarget = false }, when = function(state) return state.manaPct <= 25 end },
+    "Arcane Explosion",
+    "Flamestrike",
+    "Blizzard",
+    "Arcane Barrage",
+    "Arcane Missiles",
+})
+
+addon.AoePriorities["MAGE:2"] = makeAoeHandler({
+    { spell = "Evocation", opts = { requireTarget = false }, when = function(state) return state.manaPct <= 25 end },
+    { spell = "Living Bomb", when = function(state) return debuff(state, "Living Bomb") < 2 end },
+    "Flamestrike",
+    "Blizzard",
+    "Dragon's Breath",
+    "Fireball",
+    "Scorch",
+})
+
+addon.AoePriorities["MAGE:3"] = makeAoeHandler({
+    { spell = "Evocation", opts = { requireTarget = false }, when = function(state) return state.manaPct <= 25 end },
+    "Blizzard",
+    "Cone of Cold",
+    { spell = "Deep Freeze", when = function(state) return buff("Fingers of Frost") > 0 end },
+    { spell = "Frostfire Bolt", when = function(state) return buff("Brain Freeze") > 0 end },
+    "Arcane Explosion",
+    "Frostbolt",
+})
+
+addon.AoePriorities["PALADIN:1"] = function(state, queueLength)
+    local queue, used = makeQueue()
+    local seal = choosePaladinSeal(state, true)
+
+    if seal then
+        push(queue, used, seal)
+    end
+    if state.playerHealthPct < 55 then
+        pushIf(queue, used, state, "Flash of Light")
+    end
+    if state.playerHealthPct < 40 then
+        pushIf(queue, used, state, "Holy Light")
+    end
+    if not hasTarget(state) then
+        return queue, queueLength
+    end
+
+    local judgement = choosePaladinJudgement(state)
+    if judgement then
+        push(queue, used, judgement)
+    end
+
+    pushIf(queue, used, state, "Consecration")
+    pushIf(queue, used, state, "Holy Wrath")
+    pushIf(queue, used, state, "Holy Shock", { requireTarget = true })
+    pushIf(queue, used, state, "Exorcism", { requireTarget = true })
+    return queue, queueLength
+end
+
+addon.AoePriorities["PALADIN:2"] = function(state, queueLength)
+    local queue, used = makeQueue()
+    local seal = choosePaladinSeal(state, false)
+
+    if buff("Righteous Fury") < 60 then
+        pushIf(queue, used, state, "Righteous Fury")
+    end
+    if seal then
+        push(queue, used, seal)
+    end
+    if not hasTarget(state) then
+        return queue, queueLength
+    end
+
+    local judgement = choosePaladinJudgement(state)
+    if judgement then
+        push(queue, used, judgement)
+    end
+
+    pushIf(queue, used, state, "Consecration")
+    pushIf(queue, used, state, "Hammer of the Righteous", { requireTarget = true })
+    pushIf(queue, used, state, "Holy Wrath")
+    pushIf(queue, used, state, "Shield of Righteousness", { requireTarget = true })
+    pushIf(queue, used, state, "Avenger's Shield", { requireTarget = true })
+    return queue, queueLength
+end
+
+addon.AoePriorities["PALADIN:3"] = function(state, queueLength)
+    local queue, used = makeQueue()
+    local seal = choosePaladinSeal(state, false)
+
+    if seal then
+        push(queue, used, seal)
+    end
+    if not hasTarget(state) then
+        return queue, queueLength
+    end
+
+    local judgement = choosePaladinJudgement(state)
+    if judgement then
+        push(queue, used, judgement)
+    end
+
+    pushIf(queue, used, state, "Divine Storm", { requireTarget = true })
+    pushIf(queue, used, state, "Consecration")
+    pushIf(queue, used, state, "Holy Wrath")
+    pushIf(queue, used, state, "Crusader Strike", { requireTarget = true })
+    pushIf(queue, used, state, "Exorcism", { requireTarget = true })
+    return queue, queueLength
+end
+
+addon.AoePriorities["PRIEST:1"] = makeAoeHandler({
+    { spell = "Power Word: Shield", opts = { requireTarget = false }, when = function(state) return state.playerHealthPct < 70 end },
+    { spell = "Flash Heal", opts = { requireTarget = false }, when = function(state) return state.playerHealthPct < 45 end },
+    "Holy Nova",
+    "Mind Sear",
+    "Penance",
+    "Smite",
+})
+
+addon.AoePriorities["PRIEST:2"] = makeAoeHandler({
+    { spell = "Renew", opts = { requireTarget = false }, when = function(state) return state.playerHealthPct < 70 end },
+    { spell = "Flash Heal", opts = { requireTarget = false }, when = function(state) return state.playerHealthPct < 45 end },
+    "Holy Nova",
+    "Mind Sear",
+    "Holy Fire",
+    "Smite",
+})
+
+addon.AoePriorities["PRIEST:3"] = makeAoeHandler({
+    { spell = "Dispersion", opts = { requireTarget = false }, when = function(state) return state.manaPct <= 25 end },
+    { spell = "Vampiric Touch", when = function(state) return debuff(state, "Vampiric Touch") < 2 end },
+    { spell = "Shadow Word: Pain", when = function(state) return debuff(state, "Shadow Word: Pain") < 2 end },
+    "Mind Sear",
+    "Mind Blast",
+    "Mind Flay",
+})
+
+addon.AoePriorities["ROGUE:1"] = makeAoeHandler({
+    { spell = "Hunger for Blood", opts = { requireTarget = false }, when = function(state) return buff("Hunger for Blood") < 6 end },
+    { spell = "Slice and Dice", opts = { requireTarget = false }, when = function(state) return (state.comboPoints or 0) >= 1 and buff("Slice and Dice") < 2 end },
+    "Fan of Knives",
+    { spell = "Envenom", when = function(state) return (state.comboPoints or 0) >= 4 end },
+    "Mutilate",
+    "Sinister Strike",
+})
+
+addon.AoePriorities["ROGUE:2"] = makeAoeHandler({
+    { spell = "Adrenaline Rush", opts = { requireTarget = false }, when = function(state) return state.energy <= 45 end },
+    { spell = "Blade Flurry", opts = { requireTarget = false } },
+    "Killing Spree",
+    "Fan of Knives",
+    { spell = "Slice and Dice", opts = { requireTarget = false }, when = function(state) return (state.comboPoints or 0) >= 1 and buff("Slice and Dice") < 2 end },
+    { spell = "Eviscerate", when = function(state) return (state.comboPoints or 0) >= 5 end },
+    "Sinister Strike",
+})
+
+addon.AoePriorities["ROGUE:3"] = makeAoeHandler({
+    { spell = "Shadow Dance", opts = { requireTarget = false } },
+    "Fan of Knives",
+    { spell = "Slice and Dice", opts = { requireTarget = false }, when = function(state) return (state.comboPoints or 0) >= 1 and buff("Slice and Dice") < 2 end },
+    { spell = "Eviscerate", when = function(state) return (state.comboPoints or 0) >= 5 end },
+    "Hemorrhage",
+    "Backstab",
+})
+
+addon.AoePriorities["SHAMAN:1"] = makeAoeHandler({
+    { spell = "Thunderstorm", opts = { requireTarget = false }, when = function(state) return state.manaPct <= 35 end },
+    { spell = "Magma Totem", opts = { requireTarget = false } },
+    "Fire Nova",
+    "Chain Lightning",
+    { spell = "Flame Shock", when = function(state) return debuff(state, "Flame Shock") < 2 end },
+    "Lava Burst",
+    "Lightning Bolt",
+})
+
+addon.AoePriorities["SHAMAN:2"] = makeAoeHandler({
+    { spell = "Lightning Shield", opts = { requireTarget = false }, when = function(state) return buff("Lightning Shield") < 20 end },
+    { spell = "Magma Totem", opts = { requireTarget = false } },
+    "Fire Nova",
+    { spell = "Feral Spirit", opts = { requireTarget = false } },
+    "Chain Lightning",
+    "Stormstrike",
+    "Lava Lash",
+    "Earth Shock",
+})
+
+addon.AoePriorities["SHAMAN:3"] = makeAoeHandler({
+    { spell = "Earth Shield", opts = { requireTarget = false }, when = function(state) return buff("Earth Shield") < 10 end },
+    { spell = "Riptide", opts = { requireTarget = false }, when = function(state) return state.playerHealthPct < 65 end },
+    { spell = "Lesser Healing Wave", opts = { requireTarget = false }, when = function(state) return state.playerHealthPct < 45 end },
+    { spell = "Magma Totem", opts = { requireTarget = false } },
+    "Fire Nova",
+    "Chain Lightning",
+    "Lava Burst",
+    "Lightning Bolt",
+})
+
+addon.AoePriorities["WARLOCK:1"] = makeAoeHandler({
+    "Seed of Corruption",
+    { spell = "Corruption", when = function(state) return debuff(state, "Corruption") < 3 end },
+    { spell = "Unstable Affliction", when = function(state) return debuff(state, "Unstable Affliction") < 3 end },
+    { spell = "Haunt", when = function(state) return debuff(state, "Haunt") < 2 end },
+    { spell = "Drain Soul", when = function(state) return state.targetHealthPct <= 25 end },
+    "Shadow Bolt",
+}, preWarlockAoe)
+
+addon.AoePriorities["WARLOCK:2"] = makeAoeHandler({
+    { spell = "Metamorphosis", opts = { requireTarget = false } },
+    { spell = "Immolation Aura", opts = { requireTarget = false }, when = function() return buff("Metamorphosis") > 0 end },
+    "Seed of Corruption",
+    "Hellfire",
+    { spell = "Immolate", when = function(state) return debuff(state, "Immolate") < 2 end },
+    { spell = "Drain Soul", when = function(state) return state.targetHealthPct <= 25 end },
+    "Incinerate",
+    "Shadow Bolt",
+}, preWarlockAoe)
+
+addon.AoePriorities["WARLOCK:3"] = makeAoeHandler({
+    "Rain of Fire",
+    "Shadowfury",
+    "Seed of Corruption",
+    { spell = "Immolate", when = function(state) return debuff(state, "Immolate") < 2 end },
+    { spell = "Conflagrate", when = function(state) return debuff(state, "Immolate") > 2 end },
+    "Incinerate",
+    "Shadow Bolt",
+}, preWarlockAoe)
+
+addon.AoePriorities["WARRIOR:1"] = makeAoeHandler({
+    "Bladestorm",
+    "Sweeping Strikes",
+    "Whirlwind",
+    "Thunder Clap",
+    "Mortal Strike",
+    { spell = "Cleave", when = function(state) return state.rage >= 45 end },
+    { spell = "Execute", when = function(state) return state.targetHealthPct <= 20 end },
+})
+
+addon.AoePriorities["WARRIOR:2"] = makeAoeHandler({
+    "Whirlwind",
+    "Bloodthirst",
+    { spell = "Cleave", when = function(state) return state.rage >= 40 end },
+    "Slam",
+    { spell = "Execute", when = function(state) return state.targetHealthPct <= 20 end },
+})
+
+addon.AoePriorities["WARRIOR:3"] = makeAoeHandler({
+    "Shockwave",
+    "Thunder Clap",
+    "Revenge",
+    "Shield Slam",
+    "Devastate",
+    { spell = "Cleave", when = function(state) return state.rage >= 35 end },
+    { spell = "Heroic Strike", when = function(state) return state.rage >= 55 end },
+})
+
 local CLASS_FALLBACKS = {
     DEATHKNIGHT = { "Icy Touch", "Plague Strike", "Death Coil" },
     DRUID = { "Moonfire", "Wrath", "Starfire" },
@@ -963,6 +1379,38 @@ local CLASS_FALLBACKS = {
     WARLOCK = { "Corruption", "Shadow Bolt", "Immolate" },
     WARRIOR = { "Mortal Strike", "Bloodthirst", "Slam" },
 }
+
+local CLASS_AOE_FALLBACKS = {
+    DEATHKNIGHT = { "Death and Decay", "Howling Blast", "Blood Boil" },
+    DRUID = { "Hurricane", "Starfall", "Wrath" },
+    HUNTER = { "Volley", "Multi-Shot", "Steady Shot" },
+    MAGE = { "Blizzard", "Flamestrike", "Arcane Explosion" },
+    PALADIN = { "Consecration", "Holy Wrath", "Crusader Strike" },
+    PRIEST = { "Mind Sear", "Holy Nova", "Mind Blast" },
+    ROGUE = { "Fan of Knives", "Sinister Strike", "Eviscerate" },
+    SHAMAN = { "Chain Lightning", "Fire Nova", "Lightning Bolt" },
+    WARLOCK = { "Seed of Corruption", "Rain of Fire", "Shadow Bolt" },
+    WARRIOR = { "Whirlwind", "Thunder Clap", "Cleave" },
+}
+
+local function genericAoeFallback(state)
+    local queue, used = makeQueue()
+
+    if hasTarget(state) then
+        local list = CLASS_AOE_FALLBACKS[state.class] or CLASS_FALLBACKS[state.class]
+        if list then
+            for _, spell in ipairs(list) do
+                pushIf(queue, used, state, spell, { requireTarget = true })
+            end
+        end
+    end
+
+    if #queue == 0 and addon:IsSpellKnownLocal(6603) then
+        push(queue, used, 6603)
+    end
+
+    return queue
+end
 
 local function genericFallback(state)
     local queue, used = makeQueue()
@@ -986,6 +1434,31 @@ end
 function addon:GetPriorityQueue(state)
     local queueLength = (self.db and self.db.queueLength) or 1
     local key = state.specKey
+    local aoeThreshold = (self.db and self.db.aoeThreshold) or 3
+    local enemyCount = state.enemyCount or 0
+    local aoeMode = enemyCount >= aoeThreshold
+
+    if aoeMode then
+        local aoeHandler = key and self.AoePriorities[key]
+        if aoeHandler then
+            local aoeQueue = aoeHandler(state, queueLength)
+            if aoeQueue and #aoeQueue > 0 then
+                while #aoeQueue > queueLength do
+                    table.remove(aoeQueue)
+                end
+                return aoeQueue, tostring(key) .. ":aoe"
+            end
+        end
+
+        local aoeFallback = genericAoeFallback(state)
+        if aoeFallback and #aoeFallback > 0 then
+            while #aoeFallback > queueLength do
+                table.remove(aoeFallback)
+            end
+            return aoeFallback, "fallback:aoe"
+        end
+    end
+
     local handler = key and self.Priorities[key]
 
     if handler then

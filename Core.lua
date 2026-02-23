@@ -10,6 +10,36 @@ local floor = math.floor
 local UnitPowerSafe = UnitPower or UnitMana
 local UnitPowerMaxSafe = UnitPowerMax or UnitManaMax
 local BOOKTYPE_SPELL_SAFE = BOOKTYPE_SPELL or "spell"
+local band = bit and bit.band
+local strfind = string.find
+local wipeTable = wipe or function(t)
+    for k in pairs(t) do
+        t[k] = nil
+    end
+end
+local ENEMY_SCAN_INTERVAL = 0.25
+local ENEMY_TRACK_WINDOW = 6
+local ENEMY_TRACKER_MAX = 64
+
+local ENEMY_UNITS_ALWAYS = {
+    "target",
+    "targettarget",
+    "focus",
+    "mouseover",
+    "pettarget",
+}
+
+local ENEMY_UNITS_COMBAT = {}
+for i = 1, 4 do
+    ENEMY_UNITS_COMBAT[#ENEMY_UNITS_COMBAT + 1] = "party" .. i .. "target"
+end
+for i = 1, 5 do
+    ENEMY_UNITS_COMBAT[#ENEMY_UNITS_COMBAT + 1] = "boss" .. i
+    ENEMY_UNITS_COMBAT[#ENEMY_UNITS_COMBAT + 1] = "arena" .. i
+end
+for i = 1, 10 do
+    ENEMY_UNITS_COMBAT[#ENEMY_UNITS_COMBAT + 1] = "nameplate" .. i
+end
 
 local defaults = {
     enabled = true,
@@ -23,14 +53,21 @@ local defaults = {
     x = 0,
     y = -120,
     queueLength = 1, -- next-action mode by default
-    dbVersion = 2,
+    aoeThreshold = 3,
+    dbVersion = 3,
 }
 
 addon.state = {}
 addon.knownSpellsByName = addon.knownSpellsByName or {}
 addon.knownSpellsByID = addon.knownSpellsByID or {}
 addon.knownSpellCount = addon.knownSpellCount or 0
+addon.knownLocalCache = addon.knownLocalCache or {}
 addon.glyphNames = addon.glyphNames or {}
+addon.enemyTracker = addon.enemyTracker or {}
+addon.enemyTrackerCount = addon.enemyTrackerCount or 0
+addon.playerGUID = addon.playerGUID or nil
+addon.petGUID = addon.petGUID or nil
+addon.auraQueryCache = addon.auraQueryCache or {}
 
 local function copyDefaults(dst, src)
     for k, v in pairs(src) do
@@ -60,6 +97,40 @@ local function safeNumber(v)
         return 0
     end
     return v
+end
+
+local function isHostileFlags(flags)
+    if type(flags) ~= "number" then
+        return false
+    end
+    if not band or not COMBATLOG_OBJECT_REACTION_HOSTILE then
+        return false
+    end
+    return band(flags, COMBATLOG_OBJECT_REACTION_HOSTILE) > 0
+end
+
+local function isHostileCombatEvent(event)
+    if type(event) ~= "string" then
+        return false
+    end
+    return strfind(event, "_DAMAGE", 1, true) ~= nil
+        or strfind(event, "_MISSED", 1, true) ~= nil
+        or event == "SPELL_AURA_APPLIED"
+        or event == "SPELL_AURA_REFRESH"
+end
+
+local function addHostileUnit(set, unit)
+    if not unit or unit == "" then
+        return
+    end
+    if not UnitExists(unit) or UnitIsDead(unit) then
+        return
+    end
+    if not UnitCanAttack("player", unit) then
+        return
+    end
+    local guid = UnitGUID(unit) or unit
+    set[guid] = true
 end
 
 local function normalizeSpellKey(name)
@@ -120,6 +191,156 @@ function addon:HasGlyphLike(text)
         end
     end
     return false
+end
+
+function addon:UpdateUnitGuids()
+    self.playerGUID = UnitGUID("player")
+    self.petGUID = UnitGUID("pet")
+end
+
+function addon:ResetEnemyTracker()
+    self.enemyTracker = {}
+    self.enemyTrackerCount = 0
+    self.enemyScanTime = 0
+    self.enemyScanCount = 0
+    if self.enemyUnitSet then
+        wipeTable(self.enemyUnitSet)
+    end
+end
+
+function addon:TrackEnemyGUID(guid)
+    if not guid then
+        return
+    end
+    local tracker = self.enemyTracker or {}
+    local now = GetTime()
+
+    if tracker[guid] then
+        tracker[guid] = now
+        return
+    end
+
+    local count = self.enemyTrackerCount or 0
+    if count >= ENEMY_TRACKER_MAX then
+        local oldestGUID
+        local oldestTS
+        for g, ts in pairs(tracker) do
+            if not oldestTS or ts < oldestTS then
+                oldestTS = ts
+                oldestGUID = g
+            end
+        end
+        if oldestGUID then
+            tracker[oldestGUID] = nil
+            count = max(0, count - 1)
+        end
+    end
+
+    tracker[guid] = now
+    self.enemyTracker = tracker
+    self.enemyTrackerCount = count + 1
+end
+
+local function parseCombatLogEvent(...)
+    if CombatLogGetCurrentEventInfo then
+        local _, event, _, sourceGUID, _, sourceFlags, _, destGUID, _, destFlags, _, _, _, _, auraType = CombatLogGetCurrentEventInfo()
+        return event, sourceGUID, sourceFlags, destGUID, destFlags, auraType
+    end
+
+    -- WoTLK 3.3.5 callback argument order:
+    -- timestamp, event, sourceGUID, sourceName, sourceFlags, sourceRaidFlags,
+    -- destGUID, destName, destFlags, destRaidFlags, spellID, spellName, spellSchool, auraType, ...
+    local _, event, sourceGUID, _, sourceFlags, _, destGUID, _, destFlags, _, _, _, _, auraType = ...
+    return event, sourceGUID, sourceFlags, destGUID, destFlags, auraType
+end
+
+function addon:HandleCombatLogEvent(...)
+    local event, sourceGUID, sourceFlags, destGUID, destFlags, auraType = parseCombatLogEvent(...)
+    if not isHostileCombatEvent(event) then
+        return
+    end
+    if (event == "SPELL_AURA_APPLIED" or event == "SPELL_AURA_REFRESH") and auraType ~= "DEBUFF" then
+        return
+    end
+
+    local playerGUID = self.playerGUID or UnitGUID("player")
+    local petGUID = self.petGUID or UnitGUID("pet")
+
+    if playerGUID then
+        self.playerGUID = playerGUID
+    end
+    self.petGUID = petGUID
+
+    local sourceMine = sourceGUID and (sourceGUID == playerGUID or sourceGUID == petGUID)
+    local destMine = destGUID and (destGUID == playerGUID or destGUID == petGUID)
+
+    if sourceMine and destGUID and destGUID ~= playerGUID and destGUID ~= petGUID then
+        if isHostileFlags(destFlags) or not destFlags or destFlags == 0 then
+            self:TrackEnemyGUID(destGUID)
+        end
+    elseif destMine and sourceGUID and sourceGUID ~= playerGUID and sourceGUID ~= petGUID then
+        if isHostileFlags(sourceFlags) or not sourceFlags or sourceFlags == 0 then
+            self:TrackEnemyGUID(sourceGUID)
+        end
+    end
+end
+
+function addon:CountEnemies(windowSeconds)
+    local now = GetTime()
+    local lastScan = self.enemyScanTime or 0
+    if (now - lastScan) < ENEMY_SCAN_INTERVAL then
+        return self.enemyScanCount or 0
+    end
+    self.enemyScanTime = now
+
+    local set = self.enemyUnitSet
+    if not set then
+        set = {}
+        self.enemyUnitSet = set
+    else
+        wipeTable(set)
+    end
+
+    local cutoff = now - (windowSeconds or ENEMY_TRACK_WINDOW)
+
+    local targetExists = UnitExists("target") and not UnitIsDead("target")
+    local inCombat = (InCombatLockdown and InCombatLockdown()) or (UnitAffectingCombat and UnitAffectingCombat("player")) or false
+    if not targetExists and not inCombat and (self.enemyTrackerCount or 0) == 0 then
+        self.enemyScanCount = 0
+        return 0
+    end
+
+    for _, unit in ipairs(ENEMY_UNITS_ALWAYS) do
+        addHostileUnit(set, unit)
+    end
+
+    if inCombat or targetExists then
+        for _, unit in ipairs(ENEMY_UNITS_COMBAT) do
+            addHostileUnit(set, unit)
+        end
+    end
+
+    local tracker = self.enemyTracker or {}
+    local trackerCount = self.enemyTrackerCount or 0
+    for guid, ts in pairs(tracker) do
+        if ts >= cutoff then
+            set[guid] = true
+        else
+            tracker[guid] = nil
+            trackerCount = trackerCount - 1
+        end
+    end
+    if trackerCount < 0 then
+        trackerCount = 0
+    end
+    self.enemyTrackerCount = trackerCount
+
+    local count = 0
+    for _ in pairs(set) do
+        count = count + 1
+    end
+    self.enemyScanCount = count
+    return count
 end
 
 function addon:RefreshKnownSpells()
@@ -207,6 +428,7 @@ function addon:RefreshKnownSpells()
     self.knownSpellsByName = byName
     self.knownSpellsByID = byID
     self.knownSpellCount = count
+    self.knownLocalCache = {}
 end
 
 function addon:IsSpellKnownLocal(spell)
@@ -224,39 +446,52 @@ function addon:IsSpellKnownLocal(spell)
         spellID = nil
     end
 
-    if IsSpellKnown and spellID and spellID > 0 then
-        local ok, known = pcall(IsSpellKnown, spellID)
-        if ok and known then
-            return true
-        end
+    local cacheKey = spellID and ("id:" .. spellID) or ("n:" .. spellName)
+    local cached = self.knownLocalCache and self.knownLocalCache[cacheKey]
+    if cached ~= nil then
+        return cached
     end
-    if IsPlayerSpell and spellID and spellID > 0 then
-        local ok, known = pcall(IsPlayerSpell, spellID)
-        if ok and known then
-            return true
-        end
-    end
+
+    local result = false
 
     if (self.knownSpellCount or 0) > 0 then
         if self.knownSpellsByName and self.knownSpellsByName[spellName] then
-            return true
+            result = true
+        else
+            local norm = normalizeSpellKey(spellName)
+            if norm and self.knownSpellsByName and self.knownSpellsByName[norm] then
+                result = true
+            elseif self.knownSpellsByID and spellID and self.knownSpellsByID[spellID] then
+                result = true
+            end
         end
-        local norm = normalizeSpellKey(spellName)
-        if norm and self.knownSpellsByName and self.knownSpellsByName[norm] then
-            return true
+    else
+        if IsSpellKnown and spellID and spellID > 0 then
+            local ok, known = pcall(IsSpellKnown, spellID)
+            if ok and known then
+                result = true
+            end
         end
-        if self.knownSpellsByID and spellID and self.knownSpellsByID[spellID] then
-            return true
+
+        if not result and IsPlayerSpell and spellID and spellID > 0 then
+            local ok, known = pcall(IsPlayerSpell, spellID)
+            if ok and known then
+                result = true
+            end
         end
-        return false
+
+        if not result then
+            -- If spellbook scan is unavailable on this core, use weak heuristics.
+            local usable, noMana = IsUsableSpell(spellName)
+            result = usable or noMana or false
+        end
     end
 
-    -- If spellbook scan is unavailable on this core, use weak heuristics.
-    local usable, noMana = IsUsableSpell(spellName)
-    if usable or noMana then
-        return true
+    if self.knownLocalCache then
+        self.knownLocalCache[cacheKey] = result and true or false
     end
-    return false
+
+    return result and true or false
 end
 
 function addon:SpellCooldownRemaining(spell)
@@ -284,12 +519,12 @@ function addon:GCDRemaining()
     return max(0, (start + duration) - GetTime())
 end
 
-function addon:IsSpellUsable(spell)
+function addon:IsSpellUsable(spell, skipKnownCheck)
     local spellName = self:GetSpellName(spell)
     if not spellName then
         return false
     end
-    if not self:IsSpellKnownLocal(spell) then
+    if not skipKnownCheck and not self:IsSpellKnownLocal(spell) then
         return false
     end
     local usable, noMana = IsUsableSpell(spellName)
@@ -332,12 +567,26 @@ function addon:FindAura(unit, spell, helpful, mineOnly)
         return false, 0, 0
     end
 
+    local cache = self.auraQueryCache
+    local cacheKey
+    if cache then
+        cacheKey = tostring(unit) .. "\31" .. spellName .. "\31" .. (helpful and "1" or "0") .. "\31" .. (mineOnly and "1" or "0")
+        local cached = cache[cacheKey]
+        if cached then
+            return cached[1], cached[2], cached[3], cached[4]
+        end
+    end
+
     -- Fast path: query by aura name when supported.
     do
         local name, _, _, count, _, duration, expirationTime, caster = auraFunc(unit, spellName)
         if name == spellName then
             if not mineOnly or isMine(caster) then
-                return true, auraRemaining(duration, expirationTime), count or 0, caster
+                local remaining = auraRemaining(duration, expirationTime)
+                if cache and cacheKey then
+                    cache[cacheKey] = { true, remaining, count or 0, caster }
+                end
+                return true, remaining, count or 0, caster
             end
         end
     end
@@ -351,13 +600,20 @@ function addon:FindAura(unit, spell, helpful, mineOnly)
 
         if name == spellName then
             if not mineOnly or isMine(caster) then
-                return true, auraRemaining(duration, expirationTime), count or 0, caster
+                local remaining = auraRemaining(duration, expirationTime)
+                if cache and cacheKey then
+                    cache[cacheKey] = { true, remaining, count or 0, caster }
+                end
+                return true, remaining, count or 0, caster
             end
         end
 
         i = i + 1
     end
 
+    if cache and cacheKey then
+        cache[cacheKey] = { false, 0, 0, nil }
+    end
     return false, 0, 0
 end
 
@@ -457,6 +713,12 @@ end
 function addon:BuildState()
     local s = self.state
     local now = GetTime()
+    local auraCache = self.auraQueryCache
+    if auraCache then
+        wipeTable(auraCache)
+    else
+        self.auraQueryCache = {}
+    end
 
     local targetExists = UnitExists("target") and not UnitIsDead("target")
     local canAttack = targetExists and not not UnitCanAttack("player", "target")
@@ -481,6 +743,8 @@ function addon:BuildState()
     s.comboPoints = GetComboPoints and GetComboPoints("player", "target") or 0
     s.moving = (GetUnitSpeed and GetUnitSpeed("player") or 0) > 0
     s.inCombat = (InCombatLockdown and InCombatLockdown()) or (UnitAffectingCombat and UnitAffectingCombat("player")) or false
+    s.enemyCount = self:CountEnemies(ENEMY_TRACK_WINDOW)
+    s.aoe = s.enemyCount >= ((self.db and self.db.aoeThreshold) or 3)
 
     s.mana = UnitPowerSafe("player", 0)
     s.manaMax = UnitPowerMaxSafe("player", 0)
@@ -510,6 +774,8 @@ function addon:ApplySetting(name, value)
         self.db.spacing = floor(clamp(value, 0, 20))
     elseif name == "queueLength" then
         self.db.queueLength = floor(clamp(value, 1, 3))
+    elseif name == "aoeThreshold" then
+        self.db.aoeThreshold = floor(clamp(value, 1, 10))
     end
 
     if self.RefreshLayout then
@@ -543,6 +809,11 @@ eventFrame:RegisterEvent("GLYPH_UPDATED")
 eventFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
 eventFrame:RegisterEvent("CHARACTER_POINTS_CHANGED")
 eventFrame:RegisterEvent("ACTIVE_TALENT_GROUP_CHANGED")
+eventFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+eventFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
+eventFrame:RegisterEvent("UNIT_PET")
 
 eventFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
@@ -562,7 +833,15 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
             HikiliDB.dbVersion = 2
         end
 
+        if oldVersion < 3 then
+            if HikiliDB.aoeThreshold == nil then
+                HikiliDB.aoeThreshold = defaults.aoeThreshold
+            end
+            HikiliDB.dbVersion = 3
+        end
+
         HikiliDB.queueLength = floor(clamp(tonumber(HikiliDB.queueLength) or 1, 1, 3))
+        HikiliDB.aoeThreshold = floor(clamp(tonumber(HikiliDB.aoeThreshold) or defaults.aoeThreshold, 1, 10))
         HikiliDB.scale = clamp(tonumber(HikiliDB.scale) or 1, 0.5, 2)
         HikiliDB.alpha = clamp(tonumber(HikiliDB.alpha) or 1, 0.2, 1)
         HikiliDB.iconSize = floor(clamp(tonumber(HikiliDB.iconSize) or 52, 30, 96))
@@ -570,10 +849,28 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
 
         addon.db = HikiliDB
     elseif event == "PLAYER_LOGIN" then
+        addon:UpdateUnitGuids()
+        addon:ResetEnemyTracker()
         addon:RefreshKnownSpells()
         addon:RefreshGlyphs()
         addon:InitializeUI()
         addon:Print("Loaded for WoTLK 3.3.5a.")
+    elseif event == "PLAYER_TARGET_CHANGED" then
+        if UnitExists("target") and UnitCanAttack("player", "target") and not UnitIsDead("target") then
+            addon:TrackEnemyGUID(UnitGUID("target"))
+        end
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        addon:UpdateUnitGuids()
+        addon:ResetEnemyTracker()
+    elseif event == "UNIT_PET" then
+        local unit = ...
+        if unit == "player" then
+            addon:UpdateUnitGuids()
+        end
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        addon:ResetEnemyTracker()
+    elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
+        addon:HandleCombatLogEvent(...)
     elseif event == "SPELLS_CHANGED" or event == "LEARNED_SPELL_IN_TAB" or event == "GLYPH_ADDED" or event == "GLYPH_REMOVED" or event == "GLYPH_UPDATED" or event == "PLAYER_TALENT_UPDATE" or event == "CHARACTER_POINTS_CHANGED" or event == "ACTIVE_TALENT_GROUP_CHANGED" then
         addon:RefreshKnownSpells()
         addon:RefreshGlyphs()

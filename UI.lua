@@ -10,6 +10,9 @@ local root
 local icons = {}
 local elapsedSinceUpdate = 0
 local updateInterval = 0.10
+local UPDATE_INTERVAL_COMBAT = 0.08
+local UPDATE_INTERVAL_TARGET = 0.12
+local UPDATE_INTERVAL_IDLE = 0.22
 local forceUpdate = false
 local QUESTION_MARK = "Interface\\Icons\\INV_Misc_QuestionMark"
 local glowPulseTime = 0
@@ -183,6 +186,20 @@ local function updateRecommendations()
     end
 end
 
+local function resolveUpdateInterval()
+    if not addon.db or not addon.db.enabled then
+        return UPDATE_INTERVAL_IDLE
+    end
+    local s = addon.state
+    if s and s.inCombat then
+        return UPDATE_INTERVAL_COMBAT
+    end
+    if s and s.targetExists and s.targetAttackable then
+        return UPDATE_INTERVAL_TARGET
+    end
+    return UPDATE_INTERVAL_IDLE
+end
+
 function addon:ApplyPosition()
     if not root then
         return
@@ -250,6 +267,7 @@ local function help()
     addon:Print("/hikili size <30-96>")
     addon:Print("/hikili spacing <0-20>")
     addon:Print("/hikili queue <1-3>")
+    addon:Print("/hikili aoe <1-10>")
     addon:Print("/hikili rescan")
     addon:Print("/hikili reset")
     addon:Print("/hikili debug")
@@ -301,6 +319,7 @@ function addon:InitializeUI()
     updateFrame:SetScript("OnUpdate", function(_, elapsed)
         elapsedSinceUpdate = elapsedSinceUpdate + elapsed
         glowPulseTime = glowPulseTime + elapsed
+        updateInterval = resolveUpdateInterval()
 
         if forceUpdate or elapsedSinceUpdate >= updateInterval then
             forceUpdate = false
@@ -393,6 +412,14 @@ function addon:InitializeUI()
             else
                 addon:Print("Usage: /hikili queue 1")
             end
+        elseif cmd == "aoe" then
+            local n = tonumber(rest)
+            if n then
+                addon:ApplySetting("aoeThreshold", n)
+                addon:Print("AOE threshold set to " .. tostring(addon.db.aoeThreshold) .. " targets.")
+            else
+                addon:Print("Usage: /hikili aoe 3")
+            end
         elseif cmd == "rescan" then
             if addon.RefreshKnownSpells then
                 addon:RefreshKnownSpells()
@@ -411,6 +438,10 @@ function addon:InitializeUI()
             local state = addon:BuildState()
             local queue, key = addon:GetPriorityQueue(state)
             local handler = addon.Priorities and state.specKey and addon.Priorities[state.specKey]
+            local trackerSize = 0
+            for _ in pairs(addon.enemyTracker or {}) do
+                trackerSize = trackerSize + 1
+            end
             local s1 = queue and queue[1] and addon:GetSpellName(queue[1]) or "-"
             local s2 = queue and queue[2] and addon:GetSpellName(queue[2]) or "-"
             local s3 = queue and queue[3] and addon:GetSpellName(queue[3]) or "-"
@@ -419,7 +450,8 @@ function addon:InitializeUI()
             local k3 = queue and queue[3] and addon:IsSpellKnownLocal(queue[3]) or false
             addon:Print("enabled=" .. tostring(addon.db.enabled) .. ", locked=" .. tostring(addon.db.locked))
             addon:Print("spec=" .. tostring(state.specKey) .. ", handler=" .. tostring(handler ~= nil) .. ", profile=" .. tostring(key) .. ", queue=" .. tostring(queue and #queue or 0))
-            addon:Print("queueLength=" .. tostring(addon.db.queueLength))
+            addon:Print("queueLength=" .. tostring(addon.db.queueLength) .. " uiInterval=" .. string.format("%.2f", updateInterval or 0))
+            addon:Print("enemyCount=" .. tostring(state.enemyCount or 0) .. " aoeThreshold=" .. tostring(addon.db.aoeThreshold or 3) .. " aoeMode=" .. tostring(state.aoe) .. " trackerSize=" .. tostring(trackerSize))
             addon:Print("target exists=" .. tostring(state.targetExists) .. " dead=" .. tostring(state.targetDead) .. " attackable=" .. tostring(state.targetAttackable))
             addon:Print("next=" .. tostring(s1) .. " | " .. tostring(s2) .. " | " .. tostring(s3))
             addon:Print("known=" .. tostring(k1) .. " | " .. tostring(k2) .. " | " .. tostring(k3))
