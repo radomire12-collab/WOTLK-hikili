@@ -721,6 +721,19 @@ end
 local dynamicActionButtonNames = {}
 local nextDynamicActionButtonScanAt = 0
 
+local function safeObjectMember(obj, key)
+    if not obj or type(key) ~= "string" or key == "" then
+        return nil
+    end
+    local ok, value = pcall(function()
+        return obj[key]
+    end)
+    if ok then
+        return value
+    end
+    return nil
+end
+
 local function refreshDynamicActionButtonNames()
     local now = GetTime and GetTime() or 0
     if now < (nextDynamicActionButtonScanAt or 0) then
@@ -731,27 +744,35 @@ local function refreshDynamicActionButtonNames()
     local list = {}
     for name, obj in pairs(_G) do
         local objType = type(obj)
-        if type(name) == "string" and (objType == "table" or objType == "userdata") and obj.GetObjectType then
-            local objectType = nil
-            local okType, resultType = pcall(obj.GetObjectType, obj)
-            if okType then
-                objectType = resultType
-            end
-            if objectType == "Button" or objectType == "CheckButton" then
-                local hasAttr = type(obj.GetAttribute) == "function"
-                local hasAction = type(obj.action) == "number"
-                local hasHotKey = (obj.HotKey and obj.HotKey.GetText)
-                    or (_G[name .. "HotKey"] and _G[name .. "HotKey"].GetText)
-                local attrType = nil
-                if hasAttr then
-                    local okAttrType, resultAttrType = pcall(obj.GetAttribute, obj, "type")
-                    if okAttrType then
-                        attrType = resultAttrType
-                    end
+        if type(name) == "string" and (objType == "table" or objType == "userdata") then
+            local getObjectType = safeObjectMember(obj, "GetObjectType")
+            if type(getObjectType) == "function" then
+                local objectType = nil
+                local okType, resultType = pcall(getObjectType, obj)
+                if okType then
+                    objectType = resultType
                 end
-                local actionLikeType = (attrType == "action" or attrType == "spell" or attrType == "macro")
-                if hasAction or hasHotKey or actionLikeType then
-                    list[#list + 1] = name
+                if objectType == "Button" or objectType == "CheckButton" then
+                    local getAttribute = safeObjectMember(obj, "GetAttribute")
+                    local hasAttr = type(getAttribute) == "function"
+                    local actionValue = safeObjectMember(obj, "action")
+                    local hasAction = type(actionValue) == "number"
+                    local hotKeyObject = safeObjectMember(obj, "HotKey")
+                    local hotKeyGetter = hotKeyObject and safeObjectMember(hotKeyObject, "GetText")
+                    local globalHotKeyObject = _G[name .. "HotKey"]
+                    local globalHotKeyGetter = globalHotKeyObject and safeObjectMember(globalHotKeyObject, "GetText")
+                    local hasHotKey = hotKeyGetter or globalHotKeyGetter
+                    local attrType = nil
+                    if hasAttr then
+                        local okAttrType, resultAttrType = pcall(getAttribute, obj, "type")
+                        if okAttrType then
+                            attrType = resultAttrType
+                        end
+                    end
+                    local actionLikeType = (attrType == "action" or attrType == "spell" or attrType == "macro")
+                    if hasAction or hasHotKey or actionLikeType then
+                        list[#list + 1] = name
+                    end
                 end
             end
         end
