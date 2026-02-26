@@ -623,6 +623,38 @@ local function findKeybindFromAnyActionSlot(spellName, spellID)
     return nil
 end
 
+local function findKeybindFromActionTexture(spellTexture)
+    if type(GetActionTexture) ~= "function" then
+        return nil
+    end
+
+    local targetTexture = normalizeTextureKey(spellTexture)
+    if not targetTexture then
+        return nil
+    end
+
+    for slot = 1, 120 do
+        local actionTexture = normalizeTextureKey(GetActionTexture(slot))
+        if actionTexture and actionTexture == targetTexture then
+            local command = bindingCommandForActionSlot(slot)
+            if command then
+                local key = firstBindingForCommand(command)
+                if key then
+                    return shortenBindingKey(key)
+                end
+            end
+
+            local buttonIndex = ((slot - 1) % 12) + 1
+            local pagedKey = firstBindingForCommand("ACTIONBUTTON" .. tostring(buttonIndex))
+            if pagedKey then
+                return shortenBindingKey(pagedKey)
+            end
+        end
+    end
+
+    return nil
+end
+
 local function findKeybindFromKnownButtons(spellName, spellID)
     for _, group in ipairs(KNOWN_ACTION_BUTTON_GROUPS) do
         for i = 1, group.count do
@@ -790,6 +822,12 @@ function addon:GetSpellKeybind(spell)
         return anySlotBind
     end
 
+    local spellTexture = self:GetSpellTexture(spellID or spellName)
+    local textureSlotBind = findKeybindFromActionTexture(spellTexture)
+    if textureSlotBind then
+        return textureSlotBind
+    end
+
     if type(GetNumBindings) == "function" and type(GetBinding) == "function" then
         local total = GetNumBindings() or 0
         for i = 1, total do
@@ -811,7 +849,7 @@ function addon:GetSpellKeybind(spell)
         return dynamicButtonBind
     end
 
-    local visualBind = findKeybindFromButtonTexture(self:GetSpellTexture(spellID or spellName))
+    local visualBind = findKeybindFromButtonTexture(spellTexture)
     if visualBind then
         return visualBind
     end
