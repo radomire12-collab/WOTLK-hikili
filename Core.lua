@@ -222,6 +222,65 @@ local function shortenBindingKey(key)
     return text
 end
 
+local function macroTokenMatchesSpell(token, spellName, spellID)
+    if type(token) ~= "string" then
+        return false
+    end
+
+    local value = token
+    value = string.gsub(value, "^%s+", "")
+    value = string.gsub(value, "%s+$", "")
+    value = string.gsub(value, "^!", "")
+    value = string.gsub(value, "^reset=[^%s]+%s*", "")
+    if value == "" then
+        return false
+    end
+
+    if spellID and tonumber(value) == spellID then
+        return true
+    end
+
+    local tokenName = GetSpellInfo(value) or value
+    if tokenName == spellName then
+        return true
+    end
+
+    local tokenKey = normalizeSpellKey(tokenName)
+    local spellKey = normalizeSpellKey(spellName)
+    return tokenKey and spellKey and tokenKey == spellKey
+end
+
+local function macroBodyMatchesSpell(macroIndex, spellName, spellID)
+    if type(macroIndex) ~= "number" or macroIndex <= 0 then
+        return false
+    end
+    if type(GetMacroInfo) ~= "function" then
+        return false
+    end
+
+    local _, _, body = GetMacroInfo(macroIndex)
+    if type(body) ~= "string" or body == "" then
+        return false
+    end
+
+    for line in string.gmatch(body, "[^\r\n]+") do
+        local command, args = string.match(line, "^%s*/([%a]+)%s*(.-)%s*$")
+        if command and args and args ~= "" then
+            local cmd = string.lower(command)
+            if cmd == "cast" or cmd == "use" or cmd == "castsequence" or cmd == "castrandom" then
+                local payload = string.gsub(args, "%b[]", "")
+                for token in string.gmatch(payload, "([^;,]+)") do
+                    if macroTokenMatchesSpell(token, spellName, spellID) then
+                        return true
+                    end
+                end
+            end
+        end
+    end
+
+    return false
+end
+
 local function actionSlotMatchesSpell(slot, spellName, spellID)
     if type(slot) ~= "number" or slot <= 0 then
         return false
@@ -247,6 +306,13 @@ local function actionSlotMatchesSpell(slot, spellName, spellID)
         if type(macroSpell) == "string" then
             local macroName = GetSpellInfo(macroSpell) or macroSpell
             return macroName == spellName
+        end
+        if macroBodyMatchesSpell(actionID, spellName, spellID) then
+            return true
+        end
+    elseif actionType == "macro" then
+        if macroBodyMatchesSpell(actionID, spellName, spellID) then
+            return true
         end
     end
 
@@ -381,6 +447,14 @@ local function buttonMatchesSpell(button, spellName, spellID)
                 local macroName = GetSpellInfo(macroSpell) or macroSpell
                 return macroName == spellName
             end
+            if macroBodyMatchesSpell(macroIndex, spellName, spellID) then
+                return true
+            end
+        end
+    elseif actionType == "macro" then
+        local okMacro, macroIndex = pcall(button.GetAttribute, button, "macro")
+        if okMacro and type(macroIndex) == "number" and macroBodyMatchesSpell(macroIndex, spellName, spellID) then
+            return true
         end
     end
 
@@ -459,6 +533,94 @@ local function getButtonHotkeyText(buttonName, button)
         text = _G[buttonName .. "HotKey"]:GetText()
     end
     return sanitizeHotkeyText(text)
+end
+
+local function normalizeTextureKey(texture)
+    if type(texture) == "number" then
+        return tostring(texture)
+    end
+    if type(texture) ~= "string" or texture == "" then
+        return nil
+    end
+    local key = string.lower(texture)
+    key = string.gsub(key, "\\", "/")
+    return key
+end
+
+local function getButtonIconTexture(buttonName, button)
+    if not buttonName or not button then
+        return nil
+    end
+
+    local iconRegion = button.icon or button.Icon or _G[buttonName .. "Icon"]
+    if iconRegion and iconRegion.GetTexture then
+        local texture = iconRegion:GetTexture()
+        if texture then
+            return texture
+        end
+    end
+
+    if button.GetNormalTexture then
+        local normal = button:GetNormalTexture()
+        if normal and normal.GetTexture then
+            local texture = normal:GetTexture()
+            if texture then
+                return texture
+            end
+        end
+    end
+
+    return nil
+end
+
+local function bindingCommandForActionSlot(slot)
+    if type(slot) ~= "number" or slot <= 0 then
+        return nil
+    end
+
+    if slot >= 1 and slot <= 12 then
+        return "ACTIONBUTTON" .. tostring(slot)
+    end
+    if slot >= 25 and slot <= 36 then
+        return "MULTIACTIONBAR3BUTTON" .. tostring(slot - 24)
+    end
+    if slot >= 37 and slot <= 48 then
+        return "MULTIACTIONBAR4BUTTON" .. tostring(slot - 36)
+    end
+    if slot >= 49 and slot <= 60 then
+        return "MULTIACTIONBAR2BUTTON" .. tostring(slot - 48)
+    end
+    if slot >= 61 and slot <= 72 then
+        return "MULTIACTIONBAR1BUTTON" .. tostring(slot - 60)
+    end
+
+    return nil
+end
+
+local function findKeybindFromAnyActionSlot(spellName, spellID)
+    if type(GetActionInfo) ~= "function" then
+        return nil
+    end
+
+    for slot = 1, 120 do
+        if actionSlotMatchesSpell(slot, spellName, spellID) then
+            local command = bindingCommandForActionSlot(slot)
+            if command then
+                local key = firstBindingForCommand(command)
+                if key then
+                    return shortenBindingKey(key)
+                end
+            end
+
+            local buttonIndex = ((slot - 1) % 12) + 1
+            local pagedKey = firstBindingForCommand("ACTIONBUTTON" .. tostring(buttonIndex))
+            if pagedKey then
+                return shortenBindingKey(pagedKey)
+            end
+        end
+    end
+
+    return nil
 end
 
 local function findKeybindFromKnownButtons(spellName, spellID)
@@ -562,6 +724,35 @@ local function findKeybindFromDynamicButtons(spellName, spellID)
     return nil
 end
 
+local function findKeybindFromButtonTexture(spellTexture)
+    local targetTexture = normalizeTextureKey(spellTexture)
+    if not targetTexture then
+        return nil
+    end
+
+    refreshDynamicActionButtonNames()
+
+    for i = 1, #dynamicActionButtonNames do
+        local buttonName = dynamicActionButtonNames[i]
+        local button = _G[buttonName]
+        if button then
+            local buttonTexture = normalizeTextureKey(getButtonIconTexture(buttonName, button))
+            if buttonTexture and buttonTexture == targetTexture then
+                local hotkeyText = getButtonHotkeyText(buttonName, button)
+                if hotkeyText then
+                    return hotkeyText
+                end
+                local key = firstBindingForButtonClick(buttonName)
+                if key then
+                    return shortenBindingKey(key)
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
 function addon:GetSpellKeybind(spell)
     local spellName = self:GetSpellName(spell)
     if not spellName or spellName == "" then
@@ -594,6 +785,11 @@ function addon:GetSpellKeybind(spell)
         end
     end
 
+    local anySlotBind = findKeybindFromAnyActionSlot(spellName, spellID)
+    if anySlotBind then
+        return anySlotBind
+    end
+
     if type(GetNumBindings) == "function" and type(GetBinding) == "function" then
         local total = GetNumBindings() or 0
         for i = 1, total do
@@ -613,6 +809,11 @@ function addon:GetSpellKeybind(spell)
     local dynamicButtonBind = findKeybindFromDynamicButtons(spellName, spellID)
     if dynamicButtonBind then
         return dynamicButtonBind
+    end
+
+    local visualBind = findKeybindFromButtonTexture(self:GetSpellTexture(spellID or spellName))
+    if visualBind then
+        return visualBind
     end
 
     return nil
