@@ -309,8 +309,30 @@ local function firstBindingForCommand(command)
     return key1 or key2
 end
 
+local function firstBindingForButtonClick(buttonName)
+    if type(buttonName) ~= "string" or buttonName == "" then
+        return nil
+    end
+
+    local commands = {
+        "CLICK " .. buttonName .. ":LeftButton",
+        "CLICK " .. buttonName .. ":Button1",
+        "CLICK " .. buttonName,
+    }
+
+    for i = 1, #commands do
+        local key = firstBindingForCommand(commands[i])
+        if key then
+            return key
+        end
+    end
+
+    return nil
+end
+
 local function buttonMatchesSpell(button, spellName, spellID)
-    if type(button) ~= "table" then
+    local buttonType = type(button)
+    if buttonType ~= "table" and buttonType ~= "userdata" then
         return false
     end
 
@@ -449,7 +471,7 @@ local function findKeybindFromKnownButtons(spellName, spellID)
                 if hotkeyText then
                     return hotkeyText
                 end
-                local key = firstBindingForCommand("CLICK " .. buttonName .. ":LeftButton")
+                local key = firstBindingForButtonClick(buttonName)
                 if key then
                     return shortenBindingKey(key)
                 end
@@ -467,10 +489,72 @@ local function findKeybindFromKnownButtons(spellName, spellID)
                 if hotkeyText then
                     return hotkeyText
                 end
-                local key = firstBindingForCommand("CLICK " .. buttonName .. ":LeftButton")
+                local key = firstBindingForButtonClick(buttonName)
                 if key then
                     return shortenBindingKey(key)
                 end
+            end
+        end
+    end
+
+    return nil
+end
+
+local dynamicActionButtonNames = {}
+local nextDynamicActionButtonScanAt = 0
+
+local function refreshDynamicActionButtonNames()
+    local now = GetTime and GetTime() or 0
+    if now < (nextDynamicActionButtonScanAt or 0) then
+        return
+    end
+    nextDynamicActionButtonScanAt = now + 2
+
+    local list = {}
+    for name, obj in pairs(_G) do
+        local objType = type(obj)
+        if type(name) == "string" and (objType == "table" or objType == "userdata") and obj.GetObjectType then
+            local objectType = nil
+            local okType, resultType = pcall(obj.GetObjectType, obj)
+            if okType then
+                objectType = resultType
+            end
+            if objectType == "Button" or objectType == "CheckButton" then
+                local hasAttr = type(obj.GetAttribute) == "function"
+                local hasAction = type(obj.action) == "number"
+                local hasHotKey = (obj.HotKey and obj.HotKey.GetText)
+                    or (_G[name .. "HotKey"] and _G[name .. "HotKey"].GetText)
+                local attrType = nil
+                if hasAttr then
+                    local okAttrType, resultAttrType = pcall(obj.GetAttribute, obj, "type")
+                    if okAttrType then
+                        attrType = resultAttrType
+                    end
+                end
+                local actionLikeType = (attrType == "action" or attrType == "spell" or attrType == "macro")
+                if hasAction or hasHotKey or actionLikeType then
+                    list[#list + 1] = name
+                end
+            end
+        end
+    end
+    dynamicActionButtonNames = list
+end
+
+local function findKeybindFromDynamicButtons(spellName, spellID)
+    refreshDynamicActionButtonNames()
+
+    for i = 1, #dynamicActionButtonNames do
+        local buttonName = dynamicActionButtonNames[i]
+        local button = _G[buttonName]
+        if button and buttonMatchesSpell(button, spellName, spellID) then
+            local hotkeyText = getButtonHotkeyText(buttonName, button)
+            if hotkeyText then
+                return hotkeyText
+            end
+            local key = firstBindingForButtonClick(buttonName)
+            if key then
+                return shortenBindingKey(key)
             end
         end
     end
@@ -524,6 +608,11 @@ function addon:GetSpellKeybind(spell)
     local buttonBind = findKeybindFromKnownButtons(spellName, spellID)
     if buttonBind then
         return buttonBind
+    end
+
+    local dynamicButtonBind = findKeybindFromDynamicButtons(spellName, spellID)
+    if dynamicButtonBind then
+        return dynamicButtonBind
     end
 
     return nil
