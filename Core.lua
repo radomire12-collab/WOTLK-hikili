@@ -19,6 +19,7 @@ local wipeTable = wipe or function(t)
 end
 local ENEMY_SCAN_INTERVAL = 0.25
 local ENEMY_TRACK_WINDOW = 4
+local ENEMY_TRACK_RECENT_SECONDS = 1.25
 local ENEMY_TRACKER_MAX = 64
 local SPELL_DATA_REFRESH_INTERVAL = 0.35
 local ENEMY_DEATH_EVENTS = {
@@ -336,6 +337,7 @@ function addon:CountEnemies(windowSeconds)
     local inCombat = (InCombatLockdown and InCombatLockdown()) or (UnitAffectingCombat and UnitAffectingCombat("player")) or false
     if not targetExists and not inCombat and (self.enemyTrackerCount or 0) == 0 then
         self.enemyScanCount = 0
+        self.enemyDirectCount = 0
         return 0
     end
 
@@ -349,11 +351,23 @@ function addon:CountEnemies(windowSeconds)
         end
     end
 
+    local directCount = 0
+    for _ in pairs(set) do
+        directCount = directCount + 1
+    end
+
     local tracker = self.enemyTracker or {}
     local trackerCount = self.enemyTrackerCount or 0
+    local trackerRecentCutoff = now - ENEMY_TRACK_RECENT_SECONDS
     for guid, ts in pairs(tracker) do
         if ts >= cutoff then
-            set[guid] = true
+            local includeTracker = true
+            if directCount <= 1 and ts < trackerRecentCutoff then
+                includeTracker = false
+            end
+            if includeTracker then
+                set[guid] = true
+            end
         else
             tracker[guid] = nil
             trackerCount = trackerCount - 1
@@ -363,6 +377,7 @@ function addon:CountEnemies(windowSeconds)
         trackerCount = 0
     end
     self.enemyTrackerCount = trackerCount
+    self.enemyDirectCount = directCount
 
     local count = 0
     for _ in pairs(set) do
@@ -837,6 +852,7 @@ function addon:BuildState()
     s.inCombat = (InCombatLockdown and InCombatLockdown()) or (UnitAffectingCombat and UnitAffectingCombat("player")) or false
     s.combatTime = s.inCombat and max(0, now - (self.combatStartTime or now)) or 0
     s.enemyCount = self:CountEnemies(ENEMY_TRACK_WINDOW)
+    s.enemyDirectCount = self.enemyDirectCount or s.enemyCount
     local cleaveThreshold = (self.db and self.db.cleaveThreshold) or defaults.cleaveThreshold
     local aoeThreshold = (self.db and self.db.aoeThreshold) or defaults.aoeThreshold
     if aoeThreshold < cleaveThreshold then
