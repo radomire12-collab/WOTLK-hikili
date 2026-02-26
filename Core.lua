@@ -222,6 +222,60 @@ local function shortenBindingKey(key)
     return text
 end
 
+local function safeObjectMember(obj, key)
+    if not obj or type(key) ~= "string" or key == "" then
+        return nil
+    end
+    local ok, value = pcall(function()
+        return obj[key]
+    end)
+    if ok then
+        return value
+    end
+    return nil
+end
+
+local function safeCallObjectMethod(obj, methodName, ...)
+    local method = safeObjectMember(obj, methodName)
+    if type(method) ~= "function" then
+        return nil
+    end
+
+    local ok, a, b, c, d, e, f, g, h = pcall(method, obj, ...)
+    if ok then
+        return a, b, c, d, e, f, g, h
+    end
+    return nil
+end
+
+local function safeCollectRegions(frame)
+    local getRegions = safeObjectMember(frame, "GetRegions")
+    if type(getRegions) ~= "function" then
+        return nil
+    end
+    local ok, regions = pcall(function()
+        return { getRegions(frame) }
+    end)
+    if ok and type(regions) == "table" then
+        return regions
+    end
+    return nil
+end
+
+local function safeCollectChildren(frame)
+    local getChildren = safeObjectMember(frame, "GetChildren")
+    if type(getChildren) ~= "function" then
+        return nil
+    end
+    local ok, children = pcall(function()
+        return { getChildren(frame) }
+    end)
+    if ok and type(children) == "table" then
+        return children
+    end
+    return nil
+end
+
 local function macroTokenMatchesSpell(token, spellName, spellID)
     if type(token) ~= "string" then
         return false
@@ -336,6 +390,8 @@ local function resolveBarActionSlot(bar, index)
     if bar.buttonPrefix then
         button = _G[bar.buttonPrefix .. tostring(index)]
     end
+    local getAttribute = button and safeObjectMember(button, "GetAttribute")
+    local buttonAction = button and safeObjectMember(button, "action")
 
     if bar.paged then
         if button and type(ActionButton_GetPagedID) == "function" then
@@ -344,14 +400,14 @@ local function resolveBarActionSlot(bar, index)
                 return slot
             end
         end
-        if button and button.GetAttribute then
-            local ok, slot = pcall(button.GetAttribute, button, "action")
+        if type(getAttribute) == "function" then
+            local ok, slot = pcall(getAttribute, button, "action")
             if ok and type(slot) == "number" and slot > 0 then
                 return slot
             end
         end
-        if button and type(button.action) == "number" and button.action > 0 then
-            return button.action
+        if type(buttonAction) == "number" and buttonAction > 0 then
+            return buttonAction
         end
 
         local page = type(GetActionBarPage) == "function" and (GetActionBarPage() or 1) or 1
@@ -361,14 +417,14 @@ local function resolveBarActionSlot(bar, index)
         return ((page - 1) * 12) + index
     end
 
-    if button and button.GetAttribute then
-        local ok, slot = pcall(button.GetAttribute, button, "action")
+    if type(getAttribute) == "function" then
+        local ok, slot = pcall(getAttribute, button, "action")
         if ok and type(slot) == "number" and slot > 0 then
             return slot
         end
     end
-    if button and type(button.action) == "number" and button.action > 0 then
-        return button.action
+    if type(buttonAction) == "number" and buttonAction > 0 then
+        return buttonAction
     end
     if bar.fallbackOffset then
         return bar.fallbackOffset + index
@@ -414,11 +470,13 @@ local function buttonMatchesSpell(button, spellName, spellID)
         return false
     end
 
+    local getAttribute = safeObjectMember(button, "GetAttribute")
     local slot = nil
-    if type(button.action) == "number" and button.action > 0 then
-        slot = button.action
-    elseif button.GetAttribute then
-        local ok, action = pcall(button.GetAttribute, button, "action")
+    local actionValue = safeObjectMember(button, "action")
+    if type(actionValue) == "number" and actionValue > 0 then
+        slot = actionValue
+    elseif type(getAttribute) == "function" then
+        local ok, action = pcall(getAttribute, button, "action")
         if ok and type(action) == "number" and action > 0 then
             slot = action
         end
@@ -427,17 +485,17 @@ local function buttonMatchesSpell(button, spellName, spellID)
         return true
     end
 
-    if not button.GetAttribute then
+    if type(getAttribute) ~= "function" then
         return false
     end
 
-    local okType, actionType = pcall(button.GetAttribute, button, "type")
+    local okType, actionType = pcall(getAttribute, button, "type")
     if not okType then
         return false
     end
 
     if actionType == "spell" then
-        local okSpell, attrSpell = pcall(button.GetAttribute, button, "spell")
+        local okSpell, attrSpell = pcall(getAttribute, button, "spell")
         if not okSpell then
             return false
         end
@@ -454,7 +512,7 @@ local function buttonMatchesSpell(button, spellName, spellID)
             return attrKey and spellKey and attrKey == spellKey
         end
     elseif actionType == "macro" and type(GetMacroSpell) == "function" then
-        local okMacro, macroIndex = pcall(button.GetAttribute, button, "macro")
+        local okMacro, macroIndex = pcall(getAttribute, button, "macro")
         if okMacro and type(macroIndex) == "number" then
             local macroSpell = GetMacroSpell(macroIndex)
             if type(macroSpell) == "number" then
@@ -476,7 +534,7 @@ local function buttonMatchesSpell(button, spellName, spellID)
             end
         end
     elseif actionType == "macro" then
-        local okMacro, macroIndex = pcall(button.GetAttribute, button, "macro")
+        local okMacro, macroIndex = pcall(getAttribute, button, "macro")
         if okMacro and type(macroIndex) == "number" and macroBodyMatchesSpell(macroIndex, spellName, spellID) then
             return true
         end
@@ -549,14 +607,51 @@ local function getButtonHotkeyText(buttonName, button)
     if not buttonName or not button then
         return nil
     end
-    local text = nil
-    if button.HotKey and button.HotKey.GetText then
-        text = button.HotKey:GetText()
+    local function readFontText(obj)
+        local text = safeCallObjectMethod(obj, "GetText")
+        if not text then
+            return nil
+        end
+        return sanitizeHotkeyText(text)
     end
-    if (not text or text == "") and _G[buttonName .. "HotKey"] and _G[buttonName .. "HotKey"].GetText then
-        text = _G[buttonName .. "HotKey"]:GetText()
+
+    local hotKeyObject = safeObjectMember(button, "HotKey")
+    local text = readFontText(hotKeyObject)
+    if text then
+        return text
     end
-    return sanitizeHotkeyText(text)
+
+    text = readFontText(_G[buttonName .. "HotKey"])
+    if text then
+        return text
+    end
+
+    local regions = safeCollectRegions(button)
+    if regions then
+        for i = 1, #regions do
+            local region = regions[i]
+            local regionType = safeCallObjectMethod(region, "GetObjectType")
+            if regionType == "FontString" then
+                local regionName = safeCallObjectMethod(region, "GetName")
+                local regionNameKey = type(regionName) == "string" and string.lower(regionName) or nil
+                local candidate = readFontText(region)
+                if candidate and regionNameKey and string.find(regionNameKey, "hotkey", 1, true) then
+                    return candidate
+                end
+                local ignoredRegion = regionNameKey
+                    and (string.find(regionNameKey, "count", 1, true) or string.find(regionNameKey, "name", 1, true))
+                if candidate and not ignoredRegion then
+                    local shortCandidate = string.len(candidate) <= 4
+                    local looksModified = string.find(candidate, "-", 1, true) or string.find(candidate, "M", 1, true)
+                    if shortCandidate or looksModified then
+                        return candidate
+                    end
+                end
+            end
+        end
+    end
+
+    return nil
 end
 
 local function normalizeTextureKey(texture)
@@ -576,20 +671,64 @@ local function getButtonIconTexture(buttonName, button)
         return nil
     end
 
-    local iconRegion = button.icon or button.Icon or _G[buttonName .. "Icon"]
-    if iconRegion and iconRegion.GetTexture then
-        local texture = iconRegion:GetTexture()
-        if texture then
+    local function isSpellLikeTexture(texture)
+        local key = normalizeTextureKey(texture)
+        if not key then
+            return nil
+        end
+        if string.find(key, "interface/icons/", 1, true) then
             return texture
+        end
+        return nil
+    end
+
+    local function textureFromObject(obj)
+        local texture = safeCallObjectMethod(obj, "GetTexture")
+        return isSpellLikeTexture(texture)
+    end
+
+    local iconRegion = safeObjectMember(button, "icon") or safeObjectMember(button, "Icon") or _G[buttonName .. "Icon"]
+    local iconTexture = textureFromObject(iconRegion)
+    if iconTexture then
+        return iconTexture
+    end
+
+    local normal = safeCallObjectMethod(button, "GetNormalTexture")
+    local normalTexture = textureFromObject(normal)
+    if normalTexture then
+        return normalTexture
+    end
+
+    local regions = safeCollectRegions(button)
+    if regions then
+        for i = 1, #regions do
+            local region = regions[i]
+            local regionType = safeCallObjectMethod(region, "GetObjectType")
+            if regionType == "Texture" then
+                local texture = textureFromObject(region)
+                if texture then
+                    return texture
+                end
+            end
         end
     end
 
-    if button.GetNormalTexture then
-        local normal = button:GetNormalTexture()
-        if normal and normal.GetTexture then
-            local texture = normal:GetTexture()
-            if texture then
-                return texture
+    local children = safeCollectChildren(button)
+    if children then
+        for i = 1, #children do
+            local child = children[i]
+            local childRegions = safeCollectRegions(child)
+            if childRegions then
+                for j = 1, #childRegions do
+                    local childRegion = childRegions[j]
+                    local childRegionType = safeCallObjectMethod(childRegion, "GetObjectType")
+                    if childRegionType == "Texture" then
+                        local texture = textureFromObject(childRegion)
+                        if texture then
+                            return texture
+                        end
+                    end
+                end
             end
         end
     end
@@ -721,19 +860,6 @@ end
 local dynamicActionButtonNames = {}
 local nextDynamicActionButtonScanAt = 0
 
-local function safeObjectMember(obj, key)
-    if not obj or type(key) ~= "string" or key == "" then
-        return nil
-    end
-    local ok, value = pcall(function()
-        return obj[key]
-    end)
-    if ok then
-        return value
-    end
-    return nil
-end
-
 local function refreshDynamicActionButtonNames()
     local now = GetTime and GetTime() or 0
     if now < (nextDynamicActionButtonScanAt or 0) then
@@ -770,7 +896,8 @@ local function refreshDynamicActionButtonNames()
                         end
                     end
                     local actionLikeType = (attrType == "action" or attrType == "spell" or attrType == "macro")
-                    if hasAction or hasHotKey or actionLikeType then
+                    local hasIcon = normalizeTextureKey(getButtonIconTexture(name, obj)) ~= nil
+                    if hasAction or hasHotKey or actionLikeType or hasIcon then
                         list[#list + 1] = name
                     end
                 end
