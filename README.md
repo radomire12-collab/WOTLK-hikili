@@ -2,6 +2,13 @@
 
 `Hikili` is a lightweight priority helper inspired by Hekili, adapted for WoW 3.3.5a API.
 
+## Installation
+
+- The addon folder name must be exactly `Hikili` (it must match `Hikili.toc`).
+- Correct path example:
+  `World of Warcraft Wrath of the Lich King 3.3.5 enUS\Interface\AddOns\Hikili\Hikili.toc`
+- If you unzip this repo as `WOTLK-hikili`, rename the folder to `Hikili` before launching the client.
+
 ## What it does
 
 - Dynamic next-action recommendations (default queue: 1).
