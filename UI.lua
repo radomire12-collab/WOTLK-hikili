@@ -764,7 +764,10 @@ function addon:InitializeUI()
             end
         elseif cmd == "binds" then
             local arg = string.lower(tostring(rest or ""))
-            if arg == "on" or arg == "1" or arg == "true" then
+            if arg == "" then
+                addon:Print("Keybind overlay is " .. ((addon.db.showKeybind ~= false) and "enabled" or "disabled") .. ".")
+                addon:Print("Usage: /hikili binds on|off")
+            elseif arg == "on" or arg == "1" or arg == "true" then
                 addon:ApplySetting("showKeybind", true)
                 addon:Print("Keybind overlay enabled.")
             elseif arg == "off" or arg == "0" or arg == "false" then

@@ -23,7 +23,7 @@ local ENEMY_TRACK_RECENT_SECONDS = 1.25
 local ENEMY_TRACKER_MAX = 64
 local SPELL_DATA_REFRESH_INTERVAL = 0.35
 local KEYBIND_CACHE_HIT_TTL = 60
-local KEYBIND_CACHE_MISS_TTL = 12
+local KEYBIND_CACHE_MISS_TTL = 30
 local DYNAMIC_BUTTON_SCAN_INTERVAL = 8
 local ENABLE_HEURISTIC_KEYBINDS = false
 local ENEMY_DEATH_EVENTS = {
@@ -968,6 +968,46 @@ local function findKeybindFromDynamicButtons(spellName, spellID)
     return nil
 end
 
+local function buttonIsVisible(button)
+    if not button then
+        return false
+    end
+    local shown = safeCallObjectMethod(button, "IsShown")
+    if shown == false then
+        return false
+    end
+    local visible = safeCallObjectMethod(button, "IsVisible")
+    if visible == false then
+        return false
+    end
+    local alpha = safeCallObjectMethod(button, "GetAlpha")
+    if type(alpha) == "number" and alpha <= 0 then
+        return false
+    end
+    return true
+end
+
+local function findKeybindFromVisibleButtons(spellName, spellID)
+    refreshDynamicActionButtonNames()
+
+    for i = 1, #dynamicActionButtonNames do
+        local buttonName = dynamicActionButtonNames[i]
+        local button = _G[buttonName]
+        if button and buttonIsVisible(button) and buttonMatchesSpell(button, spellName, spellID) then
+            local hotkeyText = getButtonHotkeyText(buttonName, button)
+            if hotkeyText then
+                return hotkeyText
+            end
+            local key = firstBindingForButtonClick(buttonName)
+            if key then
+                return shortenBindingKey(key)
+            end
+        end
+    end
+
+    return nil
+end
+
 local function findKeybindFromButtonTexture(spellTexture)
     local targetTexture = normalizeTextureKey(spellTexture)
     if not targetTexture then
@@ -1067,6 +1107,11 @@ function addon:GetSpellKeybind(spell)
                 return remember(shortenBindingKey(key))
             end
         end
+    end
+
+    local visibleButtonBind = findKeybindFromVisibleButtons(spellName, spellID)
+    if visibleButtonBind then
+        return remember(visibleButtonBind)
     end
 
     if ENABLE_HEURISTIC_KEYBINDS then
