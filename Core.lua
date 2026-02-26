@@ -298,6 +298,106 @@ local function resolveBarActionSlot(bar, index)
     return index
 end
 
+local function firstBindingForCommand(command)
+    if type(command) ~= "string" or command == "" then
+        return nil
+    end
+    if type(GetBindingKey) ~= "function" then
+        return nil
+    end
+    local key1, key2 = GetBindingKey(command)
+    return key1 or key2
+end
+
+local function buttonMatchesSpell(button, spellName, spellID)
+    if type(button) ~= "table" then
+        return false
+    end
+
+    local slot = nil
+    if type(button.action) == "number" and button.action > 0 then
+        slot = button.action
+    elseif button.GetAttribute then
+        local ok, action = pcall(button.GetAttribute, button, "action")
+        if ok and type(action) == "number" and action > 0 then
+            slot = action
+        end
+    end
+    if slot and actionSlotMatchesSpell(slot, spellName, spellID) then
+        return true
+    end
+
+    if not button.GetAttribute then
+        return false
+    end
+
+    local okType, actionType = pcall(button.GetAttribute, button, "type")
+    if not okType then
+        return false
+    end
+
+    if actionType == "spell" then
+        local okSpell, attrSpell = pcall(button.GetAttribute, button, "spell")
+        if not okSpell then
+            return false
+        end
+        if type(attrSpell) == "number" then
+            return spellID and (attrSpell == spellID)
+        end
+        if type(attrSpell) == "string" then
+            local attrName = GetSpellInfo(attrSpell) or attrSpell
+            return attrName == spellName
+        end
+    elseif actionType == "macro" and type(GetMacroSpell) == "function" then
+        local okMacro, macroIndex = pcall(button.GetAttribute, button, "macro")
+        if okMacro and type(macroIndex) == "number" then
+            local macroSpell = GetMacroSpell(macroIndex)
+            if type(macroSpell) == "number" then
+                return spellID and (macroSpell == spellID)
+            end
+            if type(macroSpell) == "string" then
+                local macroName = GetSpellInfo(macroSpell) or macroSpell
+                return macroName == spellName
+            end
+        end
+    end
+
+    return false
+end
+
+local function commandMatchesSpell(command, spellName, spellID)
+    if type(command) ~= "string" or command == "" then
+        return false
+    end
+
+    if string.find(command, "SPELL ", 1, true) == 1 then
+        local cmdSpell = string.sub(command, 7)
+        if type(cmdSpell) == "string" and cmdSpell ~= "" then
+            local cmdName = GetSpellInfo(cmdSpell) or cmdSpell
+            if cmdName == spellName then
+                return true
+            end
+            local cmdKey = normalizeSpellKey(cmdName)
+            local spellKey = normalizeSpellKey(spellName)
+            if cmdKey and spellKey and cmdKey == spellKey then
+                return true
+            end
+        end
+    end
+
+    if string.find(command, "CLICK ", 1, true) == 1 then
+        local buttonName = string.match(command, "^CLICK%s+([^:%s]+)")
+        if buttonName and buttonName ~= "" then
+            local button = _G[buttonName]
+            if button and buttonMatchesSpell(button, spellName, spellID) then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
 function addon:GetSpellKeybind(spell)
     local spellName = self:GetSpellName(spell)
     if not spellName or spellName == "" then
@@ -322,11 +422,21 @@ function addon:GetSpellKeybind(spell)
         for i = 1, bar.count do
             local slot = resolveBarActionSlot(bar, i)
             if actionSlotMatchesSpell(slot, spellName, spellID) then
-                local key1, key2 = GetBindingKey(bar.commandPrefix .. tostring(i))
-                local key = key1 or key2
+                local key = firstBindingForCommand(bar.commandPrefix .. tostring(i))
                 if key then
                     return shortenBindingKey(key)
                 end
+            end
+        end
+    end
+
+    if type(GetNumBindings) == "function" and type(GetBinding) == "function" then
+        local total = GetNumBindings() or 0
+        for i = 1, total do
+            local command, key1, key2 = GetBinding(i)
+            local key = key1 or key2 or firstBindingForCommand(command)
+            if key and commandMatchesSpell(command, spellName, spellID) then
+                return shortenBindingKey(key)
             end
         end
     end

@@ -82,6 +82,16 @@ local function applyIconGeometry(icon, iconSize)
     -- Keep glow a bit larger than the spell image itself.
     icon.glow:SetPoint("TOPLEFT", icon.texture, "TOPLEFT", -glPad, glPad)
     icon.glow:SetPoint("BOTTOMRIGHT", icon.texture, "BOTTOMRIGHT", glPad, -glPad)
+
+    if icon.hotkey then
+        icon.hotkey:ClearAllPoints()
+        icon.hotkey:SetPoint("TOPRIGHT", icon.texture, "TOPRIGHT", -1, -1)
+        if icon.hotkey.SetFont then
+            local font = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
+            local size = max(9, floor((iconSize * 0.24) + 0.5))
+            icon.hotkey:SetFont(font, size, "OUTLINE")
+        end
+    end
 end
 
 local function updateModeBadge(profileKey)
@@ -778,6 +788,8 @@ function addon:InitializeUI()
             local s2 = queue and queue[2] and addon:GetSpellName(queue[2]) or "-"
             local s3 = queue and queue[3] and addon:GetSpellName(queue[3]) or "-"
             local cd1 = cdQueue and cdQueue[1] and addon:GetSpellName(cdQueue[1]) or "-"
+            local b1 = queue and queue[1] and addon.GetSpellKeybind and addon:GetSpellKeybind(queue[1]) or "-"
+            local bcd = cdQueue and cdQueue[1] and addon.GetSpellKeybind and addon:GetSpellKeybind(cdQueue[1]) or "-"
             local k1 = queue and queue[1] and addon:IsSpellKnownLocal(queue[1]) or false
             local k2 = queue and queue[2] and addon:IsSpellKnownLocal(queue[2]) or false
             local k3 = queue and queue[3] and addon:IsSpellKnownLocal(queue[3]) or false
@@ -791,6 +803,7 @@ function addon:InitializeUI()
             addon:Print("casting=" .. tostring(state.casting) .. " channeling=" .. tostring(state.channeling) .. " moving=" .. tostring(state.moving) .. " castRem=" .. formatRemaining(state.castRemaining) .. " castSpell=" .. tostring(state.currentCastSpell or "-"))
             addon:Print("next=" .. tostring(s1) .. " | " .. tostring(s2) .. " | " .. tostring(s3))
             addon:Print("cdnext=" .. tostring(cd1) .. " cdprofile=" .. tostring(cdKey or "-") .. " cdwindow=" .. tostring(addon.db.cooldownWindow ~= false))
+            addon:Print("bind next=" .. tostring(b1 or "-") .. " bind cd=" .. tostring(bcd or "-"))
             addon:Print("known=" .. tostring(k1) .. " | " .. tostring(k2) .. " | " .. tostring(k3))
             addon:Print("knownCount=" .. tostring(addon.knownSpellCount or 0))
             local hasSBN = type(GetSpellBookItemName) == "function"
