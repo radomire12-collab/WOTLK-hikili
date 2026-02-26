@@ -25,6 +25,7 @@ local SPELL_DATA_REFRESH_INTERVAL = 0.35
 local KEYBIND_CACHE_HIT_TTL = 60
 local KEYBIND_CACHE_MISS_TTL = 12
 local DYNAMIC_BUTTON_SCAN_INTERVAL = 8
+local ENABLE_HEURISTIC_KEYBINDS = false
 local ENEMY_DEATH_EVENTS = {
     UNIT_DIED = true,
     UNIT_DESTROYED = true,
@@ -1040,12 +1041,6 @@ function addon:GetSpellKeybind(spell)
         return remember(anySlotBind)
     end
 
-    local spellTexture = self:GetSpellTexture(spellID or spellName)
-    local textureSlotBind = findKeybindFromActionTexture(spellTexture)
-    if textureSlotBind then
-        return remember(textureSlotBind)
-    end
-
     if type(GetNumBindings) == "function" and type(GetBinding) == "function" then
         local total = GetNumBindings() or 0
         for i = 1, total do
@@ -1057,19 +1052,27 @@ function addon:GetSpellKeybind(spell)
         end
     end
 
-    local buttonBind = findKeybindFromKnownButtons(spellName, spellID)
-    if buttonBind then
-        return remember(buttonBind)
-    end
+    if ENABLE_HEURISTIC_KEYBINDS then
+        local spellTexture = self:GetSpellTexture(spellID or spellName)
+        local textureSlotBind = findKeybindFromActionTexture(spellTexture)
+        if textureSlotBind then
+            return remember(textureSlotBind)
+        end
 
-    local dynamicButtonBind = findKeybindFromDynamicButtons(spellName, spellID)
-    if dynamicButtonBind then
-        return remember(dynamicButtonBind)
-    end
+        local buttonBind = findKeybindFromKnownButtons(spellName, spellID)
+        if buttonBind then
+            return remember(buttonBind)
+        end
 
-    local visualBind = findKeybindFromButtonTexture(spellTexture)
-    if visualBind then
-        return remember(visualBind)
+        local dynamicButtonBind = findKeybindFromDynamicButtons(spellName, spellID)
+        if dynamicButtonBind then
+            return remember(dynamicButtonBind)
+        end
+
+        local visualBind = findKeybindFromButtonTexture(spellTexture)
+        if visualBind then
+            return remember(visualBind)
+        end
     end
 
     return remember(nil)

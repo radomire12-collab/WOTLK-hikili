@@ -822,6 +822,7 @@ function addon:InitializeUI()
             addon:Print("next=" .. tostring(s1) .. " | " .. tostring(s2) .. " | " .. tostring(s3))
             addon:Print("cdnext=" .. tostring(cd1) .. " cdprofile=" .. tostring(cdKey or "-") .. " cdwindow=" .. tostring(addon.db.cooldownWindow ~= false))
             addon:Print("bind next=" .. tostring(b1 or "-") .. " bind cd=" .. tostring(bcd or "-"))
+            addon:Print("bindsShown=" .. tostring(addon.db.showKeybind ~= false) .. " heuristic=" .. tostring(false))
             addon:Print("known=" .. tostring(k1) .. " | " .. tostring(k2) .. " | " .. tostring(k3))
             addon:Print("knownCount=" .. tostring(addon.knownSpellCount or 0))
             local hasSBN = type(GetSpellBookItemName) == "function"
