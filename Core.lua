@@ -30,8 +30,6 @@ local ENEMY_DEATH_EVENTS = {
 local ENEMY_UNITS_ALWAYS = {
     "target",
     "targettarget",
-    "focus",
-    "mouseover",
     "pettarget",
 }
 
@@ -128,7 +126,7 @@ local function isHostileCombatEvent(event)
         or event == "SPELL_AURA_REFRESH"
 end
 
-local function addHostileUnit(set, unit)
+local function addHostileUnit(set, unit, requireCombat)
     if not unit or unit == "" then
         return
     end
@@ -136,6 +134,9 @@ local function addHostileUnit(set, unit)
         return
     end
     if not UnitCanAttack("player", unit) then
+        return
+    end
+    if requireCombat and UnitAffectingCombat and not UnitAffectingCombat(unit) then
         return
     end
     local guid = UnitGUID(unit)
@@ -339,12 +340,12 @@ function addon:CountEnemies(windowSeconds)
     end
 
     for _, unit in ipairs(ENEMY_UNITS_ALWAYS) do
-        addHostileUnit(set, unit)
+        addHostileUnit(set, unit, false)
     end
 
     if inCombat or targetExists then
         for _, unit in ipairs(ENEMY_UNITS_COMBAT) do
-            addHostileUnit(set, unit)
+            addHostileUnit(set, unit, true)
         end
     end
 
