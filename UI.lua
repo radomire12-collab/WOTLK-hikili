@@ -140,6 +140,19 @@ local function createIcon(parent, size)
         f.cd:SetReverse(true)
     end
 
+    f.hotkey = f:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
+    f.hotkey:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
+    f.hotkey:SetJustifyH("RIGHT")
+    f.hotkey:SetTextColor(0.94, 0.94, 0.82)
+    if f.hotkey.SetShadowColor then
+        f.hotkey:SetShadowColor(0, 0, 0, 0.95)
+    end
+    if f.hotkey.SetShadowOffset then
+        f.hotkey:SetShadowOffset(1, -1)
+    end
+    f.hotkey:SetText("")
+    f.hotkey:Hide()
+
     f:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -236,13 +249,17 @@ local function setCooldown(icon, spell)
     end
 end
 
-local function updateIcon(icon, spell)
+local function updateIcon(icon, spell, keybindText)
     if not spell then
         icon.texture:SetTexture(QUESTION_MARK)
         if icon.texture.SetDesaturated then
             icon.texture:SetDesaturated(true)
         end
         icon:SetAlpha(0.35)
+        if icon.hotkey then
+            icon.hotkey:SetText("")
+            icon.hotkey:Hide()
+        end
         icon.cd:Hide()
         icon:Show()
         return
@@ -255,6 +272,10 @@ local function updateIcon(icon, spell)
             icon.texture:SetDesaturated(true)
         end
         icon:SetAlpha(0.35)
+        if icon.hotkey then
+            icon.hotkey:SetText("")
+            icon.hotkey:Hide()
+        end
         icon.cd:Hide()
         icon:Show()
         return
@@ -263,6 +284,15 @@ local function updateIcon(icon, spell)
     icon.texture:SetTexture(tex)
     if icon.texture.SetDesaturated then
         icon.texture:SetDesaturated(false)
+    end
+    if icon.hotkey then
+        if keybindText and keybindText ~= "" then
+            icon.hotkey:SetText(keybindText)
+            icon.hotkey:Show()
+        else
+            icon.hotkey:SetText("")
+            icon.hotkey:Hide()
+        end
     end
     icon:SetAlpha(1)
     setCooldown(icon, spell)
@@ -278,12 +308,29 @@ local function updateRecommendations()
     local queue, specKey = addon:GetPriorityQueue(state)
     local cooldownQueue = addon.GetCooldownQueue and addon:GetCooldownQueue(state) or nil
     local cooldownSpell = cooldownQueue and cooldownQueue[1] or nil
+    local keybindCache = {}
+    local function getKeybind(spell)
+        if not spell or not addon.GetSpellKeybind then
+            return nil
+        end
+        local key = tostring(spell)
+        local cached = keybindCache[key]
+        if cached ~= nil then
+            if cached == false then
+                return nil
+            end
+            return cached
+        end
+        local bind = addon:GetSpellKeybind(spell)
+        keybindCache[key] = bind or false
+        return bind
+    end
     local queueLength = clampQueueLength(addon.db.queueLength or 1)
     updateModeBadge(specKey)
 
     for i = 1, queueLength do
         local spell = queue and queue[i] or nil
-        updateIcon(icons[i], spell)
+        updateIcon(icons[i], spell, getKeybind(spell))
 
         if i == 1 and spell then
             icons[i]:SetAlpha(NEXT_ICON_ALPHA)
@@ -314,7 +361,7 @@ local function updateRecommendations()
             root.cooldownIcon.border:Hide()
             root.cooldownPanel:Hide()
         else
-            updateIcon(root.cooldownIcon, cooldownSpell)
+            updateIcon(root.cooldownIcon, cooldownSpell, getKeybind(cooldownSpell))
             root.cooldownIcon:SetAlpha(1)
             root.cooldownIcon.border:Show()
             root.cooldownIcon.glow:Show()

@@ -77,6 +77,39 @@ addon.playerGUID = addon.playerGUID or nil
 addon.petGUID = addon.petGUID or nil
 addon.auraQueryCache = addon.auraQueryCache or {}
 
+local ACTION_BINDING_BARS = {
+    {
+        commandPrefix = "ACTIONBUTTON",
+        buttonPrefix = "ActionButton",
+        count = 12,
+        paged = true,
+    },
+    {
+        commandPrefix = "MULTIACTIONBAR1BUTTON",
+        buttonPrefix = "MultiBarBottomLeftButton",
+        count = 12,
+        fallbackOffset = 60, -- 61-72
+    },
+    {
+        commandPrefix = "MULTIACTIONBAR2BUTTON",
+        buttonPrefix = "MultiBarBottomRightButton",
+        count = 12,
+        fallbackOffset = 48, -- 49-60
+    },
+    {
+        commandPrefix = "MULTIACTIONBAR3BUTTON",
+        buttonPrefix = "MultiBarRightButton",
+        count = 12,
+        fallbackOffset = 24, -- 25-36
+    },
+    {
+        commandPrefix = "MULTIACTIONBAR4BUTTON",
+        buttonPrefix = "MultiBarLeftButton",
+        count = 12,
+        fallbackOffset = 36, -- 37-48
+    },
+}
+
 local function copyDefaults(dst, src)
     for k, v in pairs(src) do
         if type(v) == "table" then
@@ -171,6 +204,134 @@ function addon:GetSpellTexture(spell)
     end
     local _, _, icon = GetSpellInfo(spell)
     return icon
+end
+
+local function shortenBindingKey(key)
+    if type(key) ~= "string" or key == "" then
+        return nil
+    end
+    local text = string.upper(key)
+    text = string.gsub(text, "CTRL%-", "C-")
+    text = string.gsub(text, "SHIFT%-", "S-")
+    text = string.gsub(text, "ALT%-", "A-")
+    text = string.gsub(text, "MOUSEWHEELUP", "MWU")
+    text = string.gsub(text, "MOUSEWHEELDOWN", "MWD")
+    text = string.gsub(text, "MIDDLEMOUSE", "M3")
+    text = string.gsub(text, "NUMPAD", "N")
+    text = string.gsub(text, "BUTTON", "M")
+    return text
+end
+
+local function actionSlotMatchesSpell(slot, spellName, spellID)
+    if type(slot) ~= "number" or slot <= 0 then
+        return false
+    end
+    if type(GetActionInfo) ~= "function" then
+        return false
+    end
+
+    local actionType, actionID = GetActionInfo(slot)
+    if actionType == "spell" then
+        if spellID and actionID == spellID then
+            return true
+        end
+        local actionName = GetSpellInfo(actionID)
+        return actionName == spellName
+    end
+
+    if actionType == "macro" and type(GetMacroSpell) == "function" then
+        local macroSpell = GetMacroSpell(actionID)
+        if type(macroSpell) == "number" then
+            return spellID and macroSpell == spellID
+        end
+        if type(macroSpell) == "string" then
+            local macroName = GetSpellInfo(macroSpell) or macroSpell
+            return macroName == spellName
+        end
+    end
+
+    return false
+end
+
+local function resolveBarActionSlot(bar, index)
+    local button
+    if bar.buttonPrefix then
+        button = _G[bar.buttonPrefix .. tostring(index)]
+    end
+
+    if bar.paged then
+        if button and type(ActionButton_GetPagedID) == "function" then
+            local ok, slot = pcall(ActionButton_GetPagedID, button)
+            if ok and type(slot) == "number" and slot > 0 then
+                return slot
+            end
+        end
+        if button and button.GetAttribute then
+            local ok, slot = pcall(button.GetAttribute, button, "action")
+            if ok and type(slot) == "number" and slot > 0 then
+                return slot
+            end
+        end
+        if button and type(button.action) == "number" and button.action > 0 then
+            return button.action
+        end
+
+        local page = type(GetActionBarPage) == "function" and (GetActionBarPage() or 1) or 1
+        if type(page) ~= "number" or page < 1 then
+            page = 1
+        end
+        return ((page - 1) * 12) + index
+    end
+
+    if button and button.GetAttribute then
+        local ok, slot = pcall(button.GetAttribute, button, "action")
+        if ok and type(slot) == "number" and slot > 0 then
+            return slot
+        end
+    end
+    if button and type(button.action) == "number" and button.action > 0 then
+        return button.action
+    end
+    if bar.fallbackOffset then
+        return bar.fallbackOffset + index
+    end
+    return index
+end
+
+function addon:GetSpellKeybind(spell)
+    local spellName = self:GetSpellName(spell)
+    if not spellName or spellName == "" then
+        return nil
+    end
+    if type(GetBindingKey) ~= "function" then
+        return nil
+    end
+
+    local directA, directB = GetBindingKey("SPELL " .. spellName)
+    local direct = directA or directB
+    if direct then
+        return shortenBindingKey(direct)
+    end
+
+    local spellID = type(spell) == "number" and spell or select(7, GetSpellInfo(spellName))
+    if type(spellID) ~= "number" then
+        spellID = nil
+    end
+
+    for _, bar in ipairs(ACTION_BINDING_BARS) do
+        for i = 1, bar.count do
+            local slot = resolveBarActionSlot(bar, i)
+            if actionSlotMatchesSpell(slot, spellName, spellID) then
+                local key1, key2 = GetBindingKey(bar.commandPrefix .. tostring(i))
+                local key = key1 or key2
+                if key then
+                    return shortenBindingKey(key)
+                end
+            end
+        end
+    end
+
+    return nil
 end
 
 function addon:RefreshGlyphs()

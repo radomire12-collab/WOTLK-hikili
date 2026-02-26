@@ -14,6 +14,7 @@
 - Dynamic next-action recommendations (default queue: 1).
 - Optional preview queue up to 3 actions.
 - Optional second cooldown window for major CDs (`/hikili cdwindow on|off`).
+- Shows action keybind text on suggested spell icons when detected.
 - ST/Cleave/AOE profile switching based on tracked enemy count.
 - Cast-awareness (keeps current cast as next action while casting/channeling).
 - Spell suggestions filtered to learned spells from spellbook.
