@@ -295,7 +295,12 @@ local function actionSlotMatchesSpell(slot, spellName, spellID)
             return true
         end
         local actionName = GetSpellInfo(actionID)
-        return actionName == spellName
+        if actionName == spellName then
+            return true
+        end
+        local actionKey = normalizeSpellKey(actionName)
+        local spellKey = normalizeSpellKey(spellName)
+        return actionKey and spellKey and actionKey == spellKey
     end
 
     if actionType == "macro" and type(GetMacroSpell) == "function" then
@@ -305,7 +310,14 @@ local function actionSlotMatchesSpell(slot, spellName, spellID)
         end
         if type(macroSpell) == "string" then
             local macroName = GetSpellInfo(macroSpell) or macroSpell
-            return macroName == spellName
+            if macroName == spellName then
+                return true
+            end
+            local macroKey = normalizeSpellKey(macroName)
+            local spellKey = normalizeSpellKey(spellName)
+            if macroKey and spellKey and macroKey == spellKey then
+                return true
+            end
         end
         if macroBodyMatchesSpell(actionID, spellName, spellID) then
             return true
@@ -434,7 +446,12 @@ local function buttonMatchesSpell(button, spellName, spellID)
         end
         if type(attrSpell) == "string" then
             local attrName = GetSpellInfo(attrSpell) or attrSpell
-            return attrName == spellName
+            if attrName == spellName then
+                return true
+            end
+            local attrKey = normalizeSpellKey(attrName)
+            local spellKey = normalizeSpellKey(spellName)
+            return attrKey and spellKey and attrKey == spellKey
         end
     elseif actionType == "macro" and type(GetMacroSpell) == "function" then
         local okMacro, macroIndex = pcall(button.GetAttribute, button, "macro")
@@ -445,7 +462,14 @@ local function buttonMatchesSpell(button, spellName, spellID)
             end
             if type(macroSpell) == "string" then
                 local macroName = GetSpellInfo(macroSpell) or macroSpell
-                return macroName == spellName
+                if macroName == spellName then
+                    return true
+                end
+                local macroKey = normalizeSpellKey(macroName)
+                local spellKey = normalizeSpellKey(spellName)
+                if macroKey and spellKey and macroKey == spellKey then
+                    return true
+                end
             end
             if macroBodyMatchesSpell(macroIndex, spellName, spellID) then
                 return true
