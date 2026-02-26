@@ -398,6 +398,86 @@ local function commandMatchesSpell(command, spellName, spellID)
     return false
 end
 
+local function sanitizeHotkeyText(text)
+    if type(text) ~= "string" then
+        return nil
+    end
+    local clean = text
+    clean = string.gsub(clean, "|c%x%x%x%x%x%x%x%x", "")
+    clean = string.gsub(clean, "|r", "")
+    clean = string.gsub(clean, "%s+", "")
+    if clean == "" then
+        return nil
+    end
+    if RANGE_INDICATOR and clean == RANGE_INDICATOR then
+        return nil
+    end
+    return clean
+end
+
+local KNOWN_ACTION_BUTTON_GROUPS = {
+    { prefix = "ActionButton", count = 12 },
+    { prefix = "MultiBarBottomLeftButton", count = 12 },
+    { prefix = "MultiBarBottomRightButton", count = 12 },
+    { prefix = "MultiBarRightButton", count = 12 },
+    { prefix = "MultiBarLeftButton", count = 12 },
+    { prefix = "BT4Button", count = 120 },
+    { prefix = "DominosActionButton", count = 120 },
+}
+
+local function getButtonHotkeyText(buttonName, button)
+    if not buttonName or not button then
+        return nil
+    end
+    local text = nil
+    if button.HotKey and button.HotKey.GetText then
+        text = button.HotKey:GetText()
+    end
+    if (not text or text == "") and _G[buttonName .. "HotKey"] and _G[buttonName .. "HotKey"].GetText then
+        text = _G[buttonName .. "HotKey"]:GetText()
+    end
+    return sanitizeHotkeyText(text)
+end
+
+local function findKeybindFromKnownButtons(spellName, spellID)
+    for _, group in ipairs(KNOWN_ACTION_BUTTON_GROUPS) do
+        for i = 1, group.count do
+            local buttonName = group.prefix .. tostring(i)
+            local button = _G[buttonName]
+            if button and buttonMatchesSpell(button, spellName, spellID) then
+                local hotkeyText = getButtonHotkeyText(buttonName, button)
+                if hotkeyText then
+                    return hotkeyText
+                end
+                local key = firstBindingForCommand("CLICK " .. buttonName .. ":LeftButton")
+                if key then
+                    return shortenBindingKey(key)
+                end
+            end
+        end
+    end
+
+    -- ElvUI-style bars use a two-level naming scheme: ElvUI_BarXButtonY.
+    for bar = 1, 10 do
+        for btn = 1, 12 do
+            local buttonName = "ElvUI_Bar" .. tostring(bar) .. "Button" .. tostring(btn)
+            local button = _G[buttonName]
+            if button and buttonMatchesSpell(button, spellName, spellID) then
+                local hotkeyText = getButtonHotkeyText(buttonName, button)
+                if hotkeyText then
+                    return hotkeyText
+                end
+                local key = firstBindingForCommand("CLICK " .. buttonName .. ":LeftButton")
+                if key then
+                    return shortenBindingKey(key)
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
 function addon:GetSpellKeybind(spell)
     local spellName = self:GetSpellName(spell)
     if not spellName or spellName == "" then
@@ -439,6 +519,11 @@ function addon:GetSpellKeybind(spell)
                 return shortenBindingKey(key)
             end
         end
+    end
+
+    local buttonBind = findKeybindFromKnownButtons(spellName, spellID)
+    if buttonBind then
+        return buttonBind
     end
 
     return nil
