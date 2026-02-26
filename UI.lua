@@ -320,6 +320,9 @@ local function updateRecommendations()
     local cooldownSpell = cooldownQueue and cooldownQueue[1] or nil
     local keybindCache = {}
     local function getKeybind(spell)
+        if addon.db and addon.db.showKeybind == false then
+            return nil
+        end
         if not spell or not addon.GetSpellKeybind then
             return nil
         end
@@ -507,6 +510,7 @@ local function help()
     addon:Print("/hikili aoe <1-10>")
     addon:Print("/hikili cdsync on|off")
     addon:Print("/hikili cdwindow on|off")
+    addon:Print("/hikili binds on|off")
     addon:Print("/hikili rescan")
     addon:Print("/hikili reset")
     addon:Print("/hikili debug")
@@ -758,12 +762,26 @@ function addon:InitializeUI()
             else
                 addon:Print("Usage: /hikili cdwindow on")
             end
+        elseif cmd == "binds" then
+            local arg = string.lower(tostring(rest or ""))
+            if arg == "on" or arg == "1" or arg == "true" then
+                addon:ApplySetting("showKeybind", true)
+                addon:Print("Keybind overlay enabled.")
+            elseif arg == "off" or arg == "0" or arg == "false" then
+                addon:ApplySetting("showKeybind", false)
+                addon:Print("Keybind overlay disabled.")
+            else
+                addon:Print("Usage: /hikili binds on")
+            end
         elseif cmd == "rescan" then
             if addon.RefreshKnownSpells then
                 addon:RefreshKnownSpells()
             end
             if addon.RefreshGlyphs then
                 addon:RefreshGlyphs()
+            end
+            if addon.InvalidateKeybindCache then
+                addon:InvalidateKeybindCache()
             end
             addon:Print("Spellbook rescanned. knownCount=" .. tostring(addon.knownSpellCount or 0))
             if addon.HasGlyphLike then

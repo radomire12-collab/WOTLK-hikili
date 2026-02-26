@@ -22,6 +22,9 @@ local ENEMY_TRACK_WINDOW = 4
 local ENEMY_TRACK_RECENT_SECONDS = 1.25
 local ENEMY_TRACKER_MAX = 64
 local SPELL_DATA_REFRESH_INTERVAL = 0.35
+local KEYBIND_CACHE_HIT_TTL = 60
+local KEYBIND_CACHE_MISS_TTL = 12
+local DYNAMIC_BUTTON_SCAN_INTERVAL = 8
 local ENEMY_DEATH_EVENTS = {
     UNIT_DIED = true,
     UNIT_DESTROYED = true,
@@ -62,6 +65,7 @@ local defaults = {
     aoeThreshold = 3,
     cooldownSync = true,
     cooldownWindow = true,
+    showKeybind = true,
     dbVersion = 5,
 }
 
@@ -859,13 +863,31 @@ end
 
 local dynamicActionButtonNames = {}
 local nextDynamicActionButtonScanAt = 0
+local keybindLookupCache = {}
+
+local function keybindCacheKey(spellName, spellID)
+    if spellID then
+        return "id:" .. tostring(spellID)
+    end
+    local key = normalizeSpellKey(spellName)
+    if key and key ~= "" then
+        return "name:" .. key
+    end
+    return "raw:" .. tostring(spellName)
+end
+
+function addon:InvalidateKeybindCache()
+    wipeTable(keybindLookupCache)
+    wipeTable(dynamicActionButtonNames)
+    nextDynamicActionButtonScanAt = 0
+end
 
 local function refreshDynamicActionButtonNames()
     local now = GetTime and GetTime() or 0
     if now < (nextDynamicActionButtonScanAt or 0) then
         return
     end
-    nextDynamicActionButtonScanAt = now + 2
+    nextDynamicActionButtonScanAt = now + DYNAMIC_BUTTON_SCAN_INTERVAL
 
     local list = {}
     for name, obj in pairs(_G) do
@@ -958,23 +980,47 @@ local function findKeybindFromButtonTexture(spellTexture)
 end
 
 function addon:GetSpellKeybind(spell)
-    local spellName = self:GetSpellName(spell)
-    if not spellName or spellName == "" then
-        return nil
-    end
-    if type(GetBindingKey) ~= "function" then
+    if self.db and self.db.showKeybind == false then
         return nil
     end
 
-    local directA, directB = GetBindingKey("SPELL " .. spellName)
-    local direct = directA or directB
-    if direct then
-        return shortenBindingKey(direct)
+    local spellName = self:GetSpellName(spell)
+    if not spellName or spellName == "" then
+        return nil
     end
 
     local spellID = type(spell) == "number" and spell or select(7, GetSpellInfo(spellName))
     if type(spellID) ~= "number" then
         spellID = nil
+    end
+
+    local cacheKey = keybindCacheKey(spellName, spellID)
+    local now = GetTime and GetTime() or 0
+    local cached = keybindLookupCache[cacheKey]
+    if cached and now < (cached.expiresAt or 0) then
+        if cached.value == false then
+            return nil
+        end
+        return cached.value
+    end
+
+    local function remember(value)
+        local ttl = value and KEYBIND_CACHE_HIT_TTL or KEYBIND_CACHE_MISS_TTL
+        keybindLookupCache[cacheKey] = {
+            value = value or false,
+            expiresAt = now + ttl,
+        }
+        return value
+    end
+
+    if type(GetBindingKey) ~= "function" then
+        return remember(nil)
+    end
+
+    local directA, directB = GetBindingKey("SPELL " .. spellName)
+    local direct = directA or directB
+    if direct then
+        return remember(shortenBindingKey(direct))
     end
 
     for _, bar in ipairs(ACTION_BINDING_BARS) do
@@ -983,7 +1029,7 @@ function addon:GetSpellKeybind(spell)
             if actionSlotMatchesSpell(slot, spellName, spellID) then
                 local key = firstBindingForCommand(bar.commandPrefix .. tostring(i))
                 if key then
-                    return shortenBindingKey(key)
+                    return remember(shortenBindingKey(key))
                 end
             end
         end
@@ -991,13 +1037,13 @@ function addon:GetSpellKeybind(spell)
 
     local anySlotBind = findKeybindFromAnyActionSlot(spellName, spellID)
     if anySlotBind then
-        return anySlotBind
+        return remember(anySlotBind)
     end
 
     local spellTexture = self:GetSpellTexture(spellID or spellName)
     local textureSlotBind = findKeybindFromActionTexture(spellTexture)
     if textureSlotBind then
-        return textureSlotBind
+        return remember(textureSlotBind)
     end
 
     if type(GetNumBindings) == "function" and type(GetBinding) == "function" then
@@ -1006,27 +1052,27 @@ function addon:GetSpellKeybind(spell)
             local command, key1, key2 = GetBinding(i)
             local key = key1 or key2 or firstBindingForCommand(command)
             if key and commandMatchesSpell(command, spellName, spellID) then
-                return shortenBindingKey(key)
+                return remember(shortenBindingKey(key))
             end
         end
     end
 
     local buttonBind = findKeybindFromKnownButtons(spellName, spellID)
     if buttonBind then
-        return buttonBind
+        return remember(buttonBind)
     end
 
     local dynamicButtonBind = findKeybindFromDynamicButtons(spellName, spellID)
     if dynamicButtonBind then
-        return dynamicButtonBind
+        return remember(dynamicButtonBind)
     end
 
     local visualBind = findKeybindFromButtonTexture(spellTexture)
     if visualBind then
-        return visualBind
+        return remember(visualBind)
     end
 
-    return nil
+    return remember(nil)
 end
 
 function addon:RefreshGlyphs()
@@ -1757,6 +1803,11 @@ function addon:ApplySetting(name, value)
         self.db.cooldownSync = not not value
     elseif name == "cooldownWindow" then
         self.db.cooldownWindow = not not value
+    elseif name == "showKeybind" then
+        self.db.showKeybind = not not value
+        if self.InvalidateKeybindCache then
+            self:InvalidateKeybindCache()
+        end
     end
 
     if self.RefreshLayout then
@@ -1806,6 +1857,8 @@ eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
 eventFrame:RegisterEvent("UNIT_PET")
+eventFrame:RegisterEvent("UPDATE_BINDINGS")
+eventFrame:RegisterEvent("ACTIONBAR_PAGE_CHANGED")
 eventFrame:SetScript("OnUpdate", function()
     if not addon.pendingSpellDataRefresh then
         return
@@ -1857,6 +1910,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         HikiliDB.aoeThreshold = floor(clamp(tonumber(HikiliDB.aoeThreshold) or defaults.aoeThreshold, HikiliDB.cleaveThreshold, 10))
         HikiliDB.cooldownSync = not not HikiliDB.cooldownSync
         HikiliDB.cooldownWindow = HikiliDB.cooldownWindow ~= false
+        HikiliDB.showKeybind = HikiliDB.showKeybind ~= false
         HikiliDB.scale = clamp(tonumber(HikiliDB.scale) or 1, 0.5, 2)
         HikiliDB.alpha = clamp(tonumber(HikiliDB.alpha) or 1, 0.2, 1)
         HikiliDB.iconSize = floor(clamp(tonumber(HikiliDB.iconSize) or 52, 30, 96))
@@ -1868,6 +1922,9 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         addon:UpdateUnitGuids()
         addon:ResetEnemyTracker()
         addon:RefreshSpellData(true)
+        if addon.InvalidateKeybindCache then
+            addon:InvalidateKeybindCache()
+        end
         addon:InitializeUI()
         addon:Print("Loaded for WoTLK 3.3.5a.")
     elseif event == "PLAYER_TARGET_CHANGED" then
@@ -1878,6 +1935,9 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         addon.combatStartTime = nil
         addon:UpdateUnitGuids()
         addon:ResetEnemyTracker()
+        if addon.InvalidateKeybindCache then
+            addon:InvalidateKeybindCache()
+        end
     elseif event == "UNIT_PET" then
         local unit = ...
         if unit == "player" then
@@ -1901,7 +1961,14 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         end
     elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
         addon:HandleCombatLogEvent(...)
+    elseif event == "UPDATE_BINDINGS" or event == "ACTIONBAR_PAGE_CHANGED" then
+        if addon.InvalidateKeybindCache then
+            addon:InvalidateKeybindCache()
+        end
     elseif event == "SPELLS_CHANGED" or event == "LEARNED_SPELL_IN_TAB" or event == "GLYPH_ADDED" or event == "GLYPH_REMOVED" or event == "GLYPH_UPDATED" or event == "PLAYER_TALENT_UPDATE" or event == "CHARACTER_POINTS_CHANGED" or event == "ACTIVE_TALENT_GROUP_CHANGED" then
         addon:RefreshSpellData(false)
+        if addon.InvalidateKeybindCache then
+            addon:InvalidateKeybindCache()
+        end
     end
 end)
