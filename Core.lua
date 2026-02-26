@@ -765,6 +765,19 @@ local function bindingCommandForActionSlot(slot)
     return nil
 end
 
+local function slotOnCurrentMainBarPage(slot)
+    if type(slot) ~= "number" or slot <= 0 then
+        return false
+    end
+    local page = type(GetActionBarPage) == "function" and (GetActionBarPage() or 1) or 1
+    if type(page) ~= "number" or page < 1 then
+        page = 1
+    end
+    local startSlot = ((page - 1) * 12) + 1
+    local endSlot = startSlot + 11
+    return slot >= startSlot and slot <= endSlot
+end
+
 local function findKeybindFromAnyActionSlot(spellName, spellID)
     if type(GetActionInfo) ~= "function" then
         return nil
@@ -780,10 +793,12 @@ local function findKeybindFromAnyActionSlot(spellName, spellID)
                 end
             end
 
-            local buttonIndex = ((slot - 1) % 12) + 1
-            local pagedKey = firstBindingForCommand("ACTIONBUTTON" .. tostring(buttonIndex))
-            if pagedKey then
-                return shortenBindingKey(pagedKey)
+            if slotOnCurrentMainBarPage(slot) then
+                local buttonIndex = ((slot - 1) % 12) + 1
+                local pagedKey = firstBindingForCommand("ACTIONBUTTON" .. tostring(buttonIndex))
+                if pagedKey then
+                    return shortenBindingKey(pagedKey)
+                end
             end
         end
     end
@@ -812,10 +827,12 @@ local function findKeybindFromActionTexture(spellTexture)
                 end
             end
 
-            local buttonIndex = ((slot - 1) % 12) + 1
-            local pagedKey = firstBindingForCommand("ACTIONBUTTON" .. tostring(buttonIndex))
-            if pagedKey then
-                return shortenBindingKey(pagedKey)
+            if slotOnCurrentMainBarPage(slot) then
+                local buttonIndex = ((slot - 1) % 12) + 1
+                local pagedKey = firstBindingForCommand("ACTIONBUTTON" .. tostring(buttonIndex))
+                if pagedKey then
+                    return shortenBindingKey(pagedKey)
+                end
             end
         end
     end
