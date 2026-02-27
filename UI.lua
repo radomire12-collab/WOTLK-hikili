@@ -82,16 +82,6 @@ local function applyIconGeometry(icon, iconSize)
     -- Keep glow a bit larger than the spell image itself.
     icon.glow:SetPoint("TOPLEFT", icon.texture, "TOPLEFT", -glPad, glPad)
     icon.glow:SetPoint("BOTTOMRIGHT", icon.texture, "BOTTOMRIGHT", glPad, -glPad)
-
-    if icon.hotkey then
-        icon.hotkey:ClearAllPoints()
-        icon.hotkey:SetPoint("TOPRIGHT", icon.texture, "TOPRIGHT", -1, -1)
-        if icon.hotkey.SetFont then
-            local font = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
-            local size = max(9, floor((iconSize * 0.24) + 0.5))
-            icon.hotkey:SetFont(font, size, "OUTLINE")
-        end
-    end
 end
 
 local function updateModeBadge(profileKey)
@@ -149,19 +139,6 @@ local function createIcon(parent, size)
     if f.cd.SetReverse then
         f.cd:SetReverse(true)
     end
-
-    f.hotkey = f:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
-    f.hotkey:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
-    f.hotkey:SetJustifyH("RIGHT")
-    f.hotkey:SetTextColor(0.94, 0.94, 0.82)
-    if f.hotkey.SetShadowColor then
-        f.hotkey:SetShadowColor(0, 0, 0, 0.95)
-    end
-    if f.hotkey.SetShadowOffset then
-        f.hotkey:SetShadowOffset(1, -1)
-    end
-    f.hotkey:SetText("")
-    f.hotkey:Hide()
 
     f:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
@@ -259,17 +236,13 @@ local function setCooldown(icon, spell)
     end
 end
 
-local function updateIcon(icon, spell, keybindText)
+local function updateIcon(icon, spell)
     if not spell then
         icon.texture:SetTexture(QUESTION_MARK)
         if icon.texture.SetDesaturated then
             icon.texture:SetDesaturated(true)
         end
         icon:SetAlpha(0.35)
-        if icon.hotkey then
-            icon.hotkey:SetText("")
-            icon.hotkey:Hide()
-        end
         icon.cd:Hide()
         icon:Show()
         return
@@ -282,10 +255,6 @@ local function updateIcon(icon, spell, keybindText)
             icon.texture:SetDesaturated(true)
         end
         icon:SetAlpha(0.35)
-        if icon.hotkey then
-            icon.hotkey:SetText("")
-            icon.hotkey:Hide()
-        end
         icon.cd:Hide()
         icon:Show()
         return
@@ -294,15 +263,6 @@ local function updateIcon(icon, spell, keybindText)
     icon.texture:SetTexture(tex)
     if icon.texture.SetDesaturated then
         icon.texture:SetDesaturated(false)
-    end
-    if icon.hotkey then
-        if keybindText and keybindText ~= "" then
-            icon.hotkey:SetText(keybindText)
-            icon.hotkey:Show()
-        else
-            icon.hotkey:SetText("")
-            icon.hotkey:Hide()
-        end
     end
     icon:SetAlpha(1)
     setCooldown(icon, spell)
@@ -318,32 +278,12 @@ local function updateRecommendations()
     local queue, specKey = addon:GetPriorityQueue(state)
     local cooldownQueue = addon.GetCooldownQueue and addon:GetCooldownQueue(state) or nil
     local cooldownSpell = cooldownQueue and cooldownQueue[1] or nil
-    local keybindCache = {}
-    local function getKeybind(spell)
-        if addon.db and addon.db.showKeybind == false then
-            return nil
-        end
-        if not spell or not addon.GetSpellKeybind then
-            return nil
-        end
-        local key = tostring(spell)
-        local cached = keybindCache[key]
-        if cached ~= nil then
-            if cached == false then
-                return nil
-            end
-            return cached
-        end
-        local bind = addon:GetSpellKeybind(spell)
-        keybindCache[key] = bind or false
-        return bind
-    end
     local queueLength = clampQueueLength(addon.db.queueLength or 1)
     updateModeBadge(specKey)
 
     for i = 1, queueLength do
         local spell = queue and queue[i] or nil
-        updateIcon(icons[i], spell, getKeybind(spell))
+        updateIcon(icons[i], spell)
 
         if i == 1 and spell then
             icons[i]:SetAlpha(NEXT_ICON_ALPHA)
@@ -374,7 +314,7 @@ local function updateRecommendations()
             root.cooldownIcon.border:Hide()
             root.cooldownPanel:Hide()
         else
-            updateIcon(root.cooldownIcon, cooldownSpell, getKeybind(cooldownSpell))
+            updateIcon(root.cooldownIcon, cooldownSpell)
             root.cooldownIcon:SetAlpha(1)
             root.cooldownIcon.border:Show()
             root.cooldownIcon.glow:Show()
@@ -510,7 +450,6 @@ local function help()
     addon:Print("/hikili aoe <1-10>")
     addon:Print("/hikili cdsync on|off")
     addon:Print("/hikili cdwindow on|off")
-    addon:Print("/hikili binds on|off")
     addon:Print("/hikili rescan")
     addon:Print("/hikili reset")
     addon:Print("/hikili debug")
@@ -762,29 +701,12 @@ function addon:InitializeUI()
             else
                 addon:Print("Usage: /hikili cdwindow on")
             end
-        elseif cmd == "binds" then
-            local arg = string.lower(tostring(rest or ""))
-            if arg == "" then
-                addon:Print("Keybind overlay is " .. ((addon.db.showKeybind ~= false) and "enabled" or "disabled") .. ".")
-                addon:Print("Usage: /hikili binds on|off")
-            elseif arg == "on" or arg == "1" or arg == "true" then
-                addon:ApplySetting("showKeybind", true)
-                addon:Print("Keybind overlay enabled.")
-            elseif arg == "off" or arg == "0" or arg == "false" then
-                addon:ApplySetting("showKeybind", false)
-                addon:Print("Keybind overlay disabled.")
-            else
-                addon:Print("Usage: /hikili binds on")
-            end
         elseif cmd == "rescan" then
             if addon.RefreshKnownSpells then
                 addon:RefreshKnownSpells()
             end
             if addon.RefreshGlyphs then
                 addon:RefreshGlyphs()
-            end
-            if addon.InvalidateKeybindCache then
-                addon:InvalidateKeybindCache()
             end
             addon:Print("Spellbook rescanned. knownCount=" .. tostring(addon.knownSpellCount or 0))
             if addon.HasGlyphLike then
@@ -809,10 +731,6 @@ function addon:InitializeUI()
             local s2 = queue and queue[2] and addon:GetSpellName(queue[2]) or "-"
             local s3 = queue and queue[3] and addon:GetSpellName(queue[3]) or "-"
             local cd1 = cdQueue and cdQueue[1] and addon:GetSpellName(cdQueue[1]) or "-"
-            local b1 = queue and queue[1] and addon.GetSpellKeybind and addon:GetSpellKeybind(queue[1]) or "-"
-            local b2 = queue and queue[2] and addon.GetSpellKeybind and addon:GetSpellKeybind(queue[2]) or "-"
-            local b3 = queue and queue[3] and addon.GetSpellKeybind and addon:GetSpellKeybind(queue[3]) or "-"
-            local bcd = cdQueue and cdQueue[1] and addon.GetSpellKeybind and addon:GetSpellKeybind(cdQueue[1]) or "-"
             local k1 = queue and queue[1] and addon:IsSpellKnownLocal(queue[1]) or false
             local k2 = queue and queue[2] and addon:IsSpellKnownLocal(queue[2]) or false
             local k3 = queue and queue[3] and addon:IsSpellKnownLocal(queue[3]) or false
@@ -826,8 +744,6 @@ function addon:InitializeUI()
             addon:Print("casting=" .. tostring(state.casting) .. " channeling=" .. tostring(state.channeling) .. " moving=" .. tostring(state.moving) .. " castRem=" .. formatRemaining(state.castRemaining) .. " castSpell=" .. tostring(state.currentCastSpell or "-"))
             addon:Print("next=" .. tostring(s1) .. " | " .. tostring(s2) .. " | " .. tostring(s3))
             addon:Print("cdnext=" .. tostring(cd1) .. " cdprofile=" .. tostring(cdKey or "-") .. " cdwindow=" .. tostring(addon.db.cooldownWindow ~= false))
-            addon:Print("bind next=" .. tostring(b1 or "-") .. " | " .. tostring(b2 or "-") .. " | " .. tostring(b3 or "-") .. " bind cd=" .. tostring(bcd or "-"))
-            addon:Print("bindsShown=" .. tostring(addon.db.showKeybind ~= false) .. " heuristic=" .. tostring(false))
             addon:Print("known=" .. tostring(k1) .. " | " .. tostring(k2) .. " | " .. tostring(k3))
             addon:Print("knownCount=" .. tostring(addon.knownSpellCount or 0))
             local hasSBN = type(GetSpellBookItemName) == "function"
