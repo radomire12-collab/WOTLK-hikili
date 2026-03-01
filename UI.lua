@@ -32,6 +32,11 @@ local CD_PANEL_GAP = 8
 local CD_PANEL_SCALE = 0.84
 local CD_PANEL_PAD_X = 6
 local CD_PANEL_PAD_Y = 5
+local MODE_BADGE_MIN_WIDTH = 42
+local MODE_BADGE_HEIGHT = 16
+local MODE_BADGE_OFFSET_X = -2
+local MODE_BADGE_OFFSET_Y = 13
+local NEXT_TEXT_GAP = 10
 local deferredUIState = {
     movable = false,
     visibility = nil,
@@ -84,7 +89,7 @@ local function applyIconGeometry(icon, iconSize)
     icon.glow:SetPoint("BOTTOMRIGHT", icon.texture, "BOTTOMRIGHT", glPad, -glPad)
 end
 
-local function updateModeBadge(profileKey)
+local function updateModeBadge(profileKey, state)
     if not root or not root.modeText then
         return
     end
@@ -98,18 +103,27 @@ local function updateModeBadge(profileKey)
         end
     end
 
-    root.modeText:SetText(mode)
+    local enemyCount = state and state.enemyCount or 0
+    local text = mode
+    if enemyCount and enemyCount > 0 then
+        text = mode .. " " .. tostring(enemyCount)
+    end
+
+    root.modeText:SetText(text)
+    local width = max(MODE_BADGE_MIN_WIDTH, floor((root.modeText:GetStringWidth() or MODE_BADGE_MIN_WIDTH) + 10))
+    root.modeBadge:SetWidth(width)
+
     if mode == "AOE" then
-        root.modeBadge:SetBackdropColor(0.20, 0.06, 0.02, 0.82)
-        root.modeBadge:SetBackdropBorderColor(1.00, 0.45, 0.18, 0.95)
+        root.modeBadge:SetBackdropColor(0.21, 0.06, 0.02, 0.86)
+        root.modeBadge:SetBackdropBorderColor(1.00, 0.45, 0.18, 1.00)
         root.modeText:SetTextColor(1.00, 0.86, 0.74)
     elseif mode == "CLV" then
-        root.modeBadge:SetBackdropColor(0.20, 0.14, 0.03, 0.82)
-        root.modeBadge:SetBackdropBorderColor(1.00, 0.82, 0.22, 0.95)
+        root.modeBadge:SetBackdropColor(0.20, 0.14, 0.03, 0.86)
+        root.modeBadge:SetBackdropBorderColor(1.00, 0.82, 0.22, 1.00)
         root.modeText:SetTextColor(1.00, 0.92, 0.68)
     else
-        root.modeBadge:SetBackdropColor(0.04, 0.16, 0.06, 0.82)
-        root.modeBadge:SetBackdropBorderColor(0.35, 0.90, 0.45, 0.95)
+        root.modeBadge:SetBackdropColor(0.04, 0.16, 0.06, 0.86)
+        root.modeBadge:SetBackdropBorderColor(0.35, 0.90, 0.45, 1.00)
         root.modeText:SetTextColor(0.82, 1.00, 0.82)
     end
 end
@@ -121,10 +135,17 @@ local function createIcon(parent, size)
     f.texture = f:CreateTexture(nil, "ARTWORK")
     f.texture:SetVertexColor(1, 1, 1)
 
+    f.shadow = f:CreateTexture(nil, "BACKGROUND")
+    f.shadow:SetTexture("Interface\\Buttons\\WHITE8x8")
+    f.shadow:SetPoint("TOPLEFT", f, "TOPLEFT", -1, 1)
+    f.shadow:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 1, -1)
+    f.shadow:SetVertexColor(0, 0, 0, 0.28)
+
     f.border = f:CreateTexture(nil, "OVERLAY")
     f.border:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
     f.border:SetBlendMode("ADD")
     f.border:SetAlpha(0.36)
+    f.border:SetVertexColor(1, 1, 1)
     f.border:Hide()
 
     f.glow = f:CreateTexture(nil, "OVERLAY")
@@ -173,9 +194,15 @@ local function setMovableState()
     if addon.db.locked then
         root:EnableMouse(false)
         root:RegisterForDrag()
+        if root.dragHint then
+            root.dragHint:Hide()
+        end
     else
         root:EnableMouse(true)
         root:RegisterForDrag("LeftButton")
+        if root.dragHint then
+            root.dragHint:Show()
+        end
     end
 end
 
@@ -239,6 +266,7 @@ end
 local function updateIcon(icon, spell)
     if not spell then
         icon.texture:SetTexture(QUESTION_MARK)
+        icon.texture:SetVertexColor(1, 1, 1)
         if icon.texture.SetDesaturated then
             icon.texture:SetDesaturated(true)
         end
@@ -251,6 +279,7 @@ local function updateIcon(icon, spell)
     local tex = addon:GetSpellTexture(spell)
     if not tex then
         icon.texture:SetTexture(QUESTION_MARK)
+        icon.texture:SetVertexColor(1, 1, 1)
         if icon.texture.SetDesaturated then
             icon.texture:SetDesaturated(true)
         end
@@ -261,6 +290,7 @@ local function updateIcon(icon, spell)
     end
 
     icon.texture:SetTexture(tex)
+    icon.texture:SetVertexColor(1, 1, 1)
     if icon.texture.SetDesaturated then
         icon.texture:SetDesaturated(false)
     end
@@ -279,7 +309,8 @@ local function updateRecommendations()
     local cooldownQueue = addon.GetCooldownQueue and addon:GetCooldownQueue(state) or nil
     local cooldownSpell = cooldownQueue and cooldownQueue[1] or nil
     local queueLength = clampQueueLength(addon.db.queueLength or 1)
-    updateModeBadge(specKey)
+    local nextOutOfRange = false
+    updateModeBadge(specKey, state)
 
     for i = 1, queueLength do
         local spell = queue and queue[i] or nil
@@ -289,10 +320,28 @@ local function updateRecommendations()
             icons[i]:SetAlpha(NEXT_ICON_ALPHA)
             icons[i].border:Show()
             icons[i].glow:Show()
-            icons[i]:SetBackdropBorderColor(0.30, 0.30, 0.30, 0.95)
+            local outOfRange = false
+            if state.targetExists and state.targetAttackable and not state.targetDead then
+                outOfRange = not addon:IsSpellInRange(spell, "target")
+            end
+            nextOutOfRange = outOfRange
+            if outOfRange then
+                icons[i].texture:SetVertexColor(1.00, 0.45, 0.45)
+                icons[i].border:SetVertexColor(1.00, 0.30, 0.30)
+                icons[i].glow:SetVertexColor(1.00, 0.22, 0.22)
+                icons[i]:SetBackdropBorderColor(0.62, 0.18, 0.18, 0.96)
+            else
+                icons[i].texture:SetVertexColor(1, 1, 1)
+                icons[i].border:SetVertexColor(1, 1, 1)
+                icons[i].glow:SetVertexColor(1.00, 0.86, 0.24)
+                icons[i]:SetBackdropBorderColor(0.30, 0.30, 0.30, 0.95)
+            end
         else
             icons[i].border:Hide()
             icons[i].glow:Hide()
+            icons[i].texture:SetVertexColor(1, 1, 1)
+            icons[i].border:SetVertexColor(1, 1, 1)
+            icons[i].glow:SetVertexColor(1.00, 0.86, 0.24)
             if spell then
                 local previewAlpha = PREVIEW_ICON_ALPHA - ((i - 2) * 0.10)
                 icons[i]:SetAlpha(max(0.58, previewAlpha))
@@ -306,6 +355,23 @@ local function updateRecommendations()
     for i = queueLength + 1, #icons do
         icons[i]:Hide()
         icons[i].glow:Hide()
+    end
+
+    if root.nextSpellText then
+        local nextSpell = queue and queue[1] or nil
+        local nextSpellName = nextSpell and addon:GetSpellName(nextSpell) or nil
+        if nextSpellName and nextSpellName ~= "" then
+            root.nextSpellText:SetText(nextSpellName)
+            if nextOutOfRange then
+                root.nextSpellText:SetTextColor(1.00, 0.52, 0.52)
+            else
+                root.nextSpellText:SetTextColor(0.92, 0.92, 0.92)
+            end
+            root.nextSpellText:Show()
+        else
+            root.nextSpellText:SetText("")
+            root.nextSpellText:Hide()
+        end
     end
 
     if root.cooldownPanel and root.cooldownIcon then
@@ -403,14 +469,19 @@ function addon:RefreshLayout()
 
     if root.modeBadge then
         root.modeBadge:ClearAllPoints()
-        root.modeBadge:SetPoint("TOPRIGHT", root, "TOPRIGHT", -1, 11)
+        root.modeBadge:SetPoint("TOPRIGHT", root, "TOPRIGHT", MODE_BADGE_OFFSET_X, MODE_BADGE_OFFSET_Y)
+    end
+
+    if root.nextSpellText then
+        root.nextSpellText:ClearAllPoints()
+        root.nextSpellText:SetPoint("TOP", root, "BOTTOM", 0, -2)
     end
 
     if root.cooldownPanel and root.cooldownIcon then
         local cdIconSize = max(30, floor((size * CD_PANEL_SCALE) + 0.5))
         root.cooldownPanel:SetSize(cdIconSize + (CD_PANEL_PAD_X * 2), cdIconSize + (CD_PANEL_PAD_Y * 2))
         root.cooldownPanel:ClearAllPoints()
-        root.cooldownPanel:SetPoint("TOP", root, "BOTTOM", 0, -(spacing + CD_PANEL_GAP))
+        root.cooldownPanel:SetPoint("TOP", root, "BOTTOM", 0, -((spacing + CD_PANEL_GAP) + NEXT_TEXT_GAP))
 
         root.cooldownIcon:SetSize(cdIconSize, cdIconSize)
         applyIconGeometry(root.cooldownIcon, cdIconSize)
@@ -477,8 +548,14 @@ function addon:InitializeUI()
         edgeSize = 9,
         insets = { left = 1, right = 1, top = 1, bottom = 1 },
     })
-    root:SetBackdropColor(0, 0, 0, 0.34)
-    root:SetBackdropBorderColor(0.24, 0.24, 0.24, 0.80)
+    root:SetBackdropColor(0.02, 0.02, 0.02, 0.46)
+    root:SetBackdropBorderColor(0.28, 0.28, 0.28, 0.90)
+    root.topAccent = root:CreateTexture(nil, "BORDER")
+    root.topAccent:SetTexture("Interface\\Buttons\\WHITE8x8")
+    root.topAccent:SetPoint("TOPLEFT", root, "TOPLEFT", 2, -2)
+    root.topAccent:SetPoint("TOPRIGHT", root, "TOPRIGHT", -2, -2)
+    root.topAccent:SetHeight(2)
+    root.topAccent:SetVertexColor(0.98, 0.84, 0.36, 0.42)
     root:SetScript("OnDragStart", function(self)
         if addon.db.locked or inCombat() then
             return
@@ -491,7 +568,7 @@ function addon:InitializeUI()
     end)
 
     root.modeBadge = CreateFrame("Frame", nil, root)
-    root.modeBadge:SetSize(34, 14)
+    root.modeBadge:SetSize(MODE_BADGE_MIN_WIDTH, MODE_BADGE_HEIGHT)
     root.modeBadge:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8x8",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -499,14 +576,37 @@ function addon:InitializeUI()
         edgeSize = 8,
         insets = { left = 1, right = 1, top = 1, bottom = 1 },
     })
-    root.modeBadge:SetBackdropColor(0.04, 0.16, 0.06, 0.82)
-    root.modeBadge:SetBackdropBorderColor(0.35, 0.90, 0.45, 0.95)
-    root.modeBadge:SetPoint("TOPRIGHT", root, "TOPRIGHT", -1, 11)
+    root.modeBadge:SetBackdropColor(0.04, 0.16, 0.06, 0.86)
+    root.modeBadge:SetBackdropBorderColor(0.35, 0.90, 0.45, 1.00)
+    root.modeBadge:SetPoint("TOPRIGHT", root, "TOPRIGHT", MODE_BADGE_OFFSET_X, MODE_BADGE_OFFSET_Y)
 
     root.modeText = root.modeBadge:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     root.modeText:SetPoint("CENTER", root.modeBadge, "CENTER", 0, 0)
+    if root.modeText.SetFont then
+        root.modeText:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
+    end
+    root.modeText:SetShadowOffset(1, -1)
+    root.modeText:SetShadowColor(0, 0, 0, 0.9)
     root.modeText:SetTextColor(0.82, 1.00, 0.82)
     root.modeText:SetText("ST")
+
+    root.dragHint = root:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    root.dragHint:SetPoint("BOTTOM", root, "TOP", 0, 2)
+    root.dragHint:SetText("drag")
+    root.dragHint:SetTextColor(0.82, 0.82, 0.82, 0.85)
+    root.dragHint:SetShadowOffset(1, -1)
+    root.dragHint:SetShadowColor(0, 0, 0, 0.8)
+
+    root.nextSpellText = root:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    root.nextSpellText:SetPoint("TOP", root, "BOTTOM", 0, -2)
+    if root.nextSpellText.SetFont then
+        root.nextSpellText:SetFont(STANDARD_TEXT_FONT, 11, "OUTLINE")
+    end
+    root.nextSpellText:SetShadowOffset(1, -1)
+    root.nextSpellText:SetShadowColor(0, 0, 0, 0.9)
+    root.nextSpellText:SetTextColor(0.92, 0.92, 0.92)
+    root.nextSpellText:SetText("")
+    root.nextSpellText:Hide()
 
     root.cooldownPanel = CreateFrame("Frame", nil, root)
     root.cooldownPanel:SetBackdrop({
@@ -524,6 +624,11 @@ function addon:InitializeUI()
     root.cooldownIcon:SetPoint("CENTER", root.cooldownPanel, "CENTER", 0, 0)
 
     root.cooldownText = root.cooldownPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    if root.cooldownText.SetFont then
+        root.cooldownText:SetFont(STANDARD_TEXT_FONT, 10, "OUTLINE")
+    end
+    root.cooldownText:SetShadowOffset(1, -1)
+    root.cooldownText:SetShadowColor(0, 0, 0, 0.9)
     root.cooldownText:SetTextColor(1.00, 0.88, 0.45)
     root.cooldownText:SetText("CD")
     root.cooldownPanel:Hide()
